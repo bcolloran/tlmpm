@@ -59,29 +59,16 @@ def substep():
         F[p] = (ti.Matrix.identity(float, 2) + dt * C[p]) @ F[
             p
         ]  # deformation gradient update
-        # h = max(
-        #     0.1, min(5, ti.exp(10 * (1.0 - Jp[p])))
-        # )  # Hardening coefficient: snow gets harder when compressed
-        if material[p] == 1:  # jelly, make it softer
-            h = 0.3
+
+        h = 1
         mu, la = mu_0 * h, lambda_0 * h
-        # if material[p] == 0:  # liquid
-        #     mu = 0.0
         U, sig, V = ti.svd(F[p])
         J = 1.0
         for d in ti.static(range(2)):
             new_sig = sig[d, d]
-            # if material[p] == 2:  # Snow
-            #     new_sig = min(max(sig[d, d], 1 - 2.5e-2), 1 + 4.5e-3)  # Plasticity
             Jp[p] *= sig[d, d] / new_sig
             sig[d, d] = new_sig
             J *= new_sig
-        # if (material[p] == 0):  # Reset deformation gradient to avoid numerical instability
-        #     F[p] = ti.Matrix.identity(float, 2) * ti.sqrt(J)
-        # elif material[p] == 2:
-        #     F[p] = (
-        #         U @ sig @ V.transpose()
-        #     )  # Reconstruct elastic deformation gradient after plasticity
         stress = 2 * mu * (F[p] - U @ V.transpose()) @ F[
             p
         ].transpose() + ti.Matrix.identity(float, 2) * la * J * (J - 1)
