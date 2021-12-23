@@ -20,7 +20,7 @@ lambda_0 = E * nu / ((1 + nu) * (1 - 2 * nu))  # Lame parameters
 
 x_config = ti.Vector.field(2, dtype=float, shape=n_particles)  # position
 x_render = ti.Vector.field(2, dtype=float, shape=n_particles)  # position
-v = ti.Vector.field(2, dtype=float, shape=n_particles)  # velocity
+
 C = ti.Matrix.field(2, 2, dtype=float, shape=n_particles)  # affine velocity field
 F = ti.Matrix.field(2, 2, dtype=float, shape=n_particles)  # deformation gradient
 Pk = ti.Matrix.field(2, 2, dtype=float, shape=n_particles)  # pk stresses
@@ -34,16 +34,21 @@ W_grad_y_p2g = ti.Matrix.field(3, 3, dtype=float, shape=n_particles)
 grid_v = ti.Vector.field(
     2, dtype=float, shape=(n_grid, n_grid)
 )  # grid node momentum/velocity
+grid_v_next_tmp = ti.Vector.field(
+    2, dtype=float, shape=(n_grid, n_grid)
+)  # grid node momentum/velocity
 grid_m = ti.field(dtype=float, shape=(n_grid, n_grid))  # grid node mass
+grid_mv = ti.Vector.field(2, dtype=float, shape=(n_grid, n_grid))  # grid forces
 grid_f = ti.Vector.field(2, dtype=float, shape=(n_grid, n_grid))  # grid forces
 
 gravity = ti.Vector.field(2, dtype=float, shape=())
-gravity[None] = [0, -1]
+gravity[None] = [0, 0]
 attractor_strength = ti.field(dtype=float, shape=())
 attractor_pos = ti.Vector.field(2, dtype=float, shape=())
 
 max_nodal_mass = ti.field(dtype=float, shape=())
 
+alpha = 0.99
 
 # group_size = n_particles // 3
 group_size = n_particles
@@ -53,16 +58,27 @@ jelly = ti.Vector.field(2, dtype=float, shape=group_size)  # position
 mouse_circle = ti.Vector.field(2, dtype=float, shape=(1,))
 
 
+v = ti.Vector.field(2, dtype=float, shape=n_particles)  # velocity
+
+################################################################################
+# init
+################################################################################
+
+
 @ti.kernel
 def initialization():
     for p in range(n_particles):
         x_config[p] = [
-            ti.random() * 0.2 + 0.3 + 0.10 * (p // group_size),
-            ti.random() * 0.2 + 0.5 + 0.32 * (p // group_size),
+            0.5 + (ti.random() - 0.5) * 0.1,
+            0.5 + (ti.random() - 0.5) * 0.3,
+            # ti.random() * 0.2 + 0.5 + 0.32 * (i // group_size),
         ]
+        x_render[p] = x_config[p]
         # material[p] = i // group_size  # 0: fluid, 1: jelly, 2: snow
+        center_offset = x_config[p] - ti.Vector([0.5, 0.5])
         material[p] = 1  # 0: fluid, 1: jelly, 2: snow
-        v[p] = [0, 0]
+        # v[p] = [0, 0]
+        v[p] = 0.50 * ti.Vector([center_offset[1], -center_offset[0]])
         F[p] = ti.Matrix([[1, 0], [0, 1]])
         Jp[p] = 1
         C[p] = ti.Matrix.zero(float, 2, 2)
@@ -122,18 +138,100 @@ def compute_nodal_mass():
         ti.atomic_max(max_nodal_mass[None], grid_m[i, j])
 
 
+@ti.kernel
+def init_grid_v():
+    # TLMPM contacts, Alg. 1, line 8-12
+    for p in x_config:
+        base = (x_config[p] * inv_dx - 0.5).cast(int)
+        for i, j in ti.static(ti.ndrange(3, 3)):  # Loop over 3x3 grid node neighborhood
+            offset = ti.Vector([i, j])
+            grid_v[base + offset] += W_p2g[p][i, j] * v[p]
+
+
 initialization()
 compute_p2g_weights_and_grads()
 compute_nodal_mass()
+init_grid_v()
 
 print(max_nodal_mass[None])
+print(v[0])
 
-# @ti.kernel
-# def substep():
-#     # clear grid
-#     for i, j in grid_m:
-#         grid_v[i, j] = [0, 0]
-#         grid_m[i, j] = 0
+################################################################################
+# algorithm steps (TLMPM contacts, Alg. 1)
+################################################################################
+
+
+@ti.kernel
+def reset_grid():
+    # TLMPM contacts, Alg. 1, line 7
+    for i, j in grid_m:
+        grid_mv[i, j] = [0, 0]
+        grid_f[i, j] = [0, 0]
+
+
+@ti.kernel
+def p2g():
+    # TLMPM contacts, Alg. 1, line 8-12
+    for p in x_config:
+        base = (x_config[p] * inv_dx - 0.5).cast(int)
+        for i, j in ti.static(ti.ndrange(3, 3)):  # Loop over 3x3 grid node neighborhood
+            offset = ti.Vector([i, j])
+            weighted_mass = p_mass * W_p2g[p][i, j]
+            grid_mv[base + offset] += weighted_mass * v[p]
+            # force_external = weighted_mass * gravity[None]
+            # force_internal = ti.Vector([0.0, 0.0])
+            # grid_f[base + offset] += force_external + force_internal
+
+
+@ti.kernel
+def update_momenta():
+    # TLMPM contacts, Alg. 1, line 14, 17
+    for i, j in grid_m:
+        if grid_m[i, j] > 0:
+            grid_v_next_tmp[i, j] = (grid_mv[i, j] + grid_f[i, j] * dt) / grid_m[i, j]
+
+
+@ti.kernel
+def update_particle_and_grid_velocity():
+    # TLMPM contacts, Alg. 1, line 18
+    for p in v:
+        v_p = v[p] * alpha
+        base = (x_config[p] * inv_dx - 0.5).cast(int)
+        for i, j in ti.static(ti.ndrange(3, 3)):  # Loop over 3x3 grid node neighborhood
+            offset = ti.Vector([i, j])
+            v_next = grid_v_next_tmp[base + offset]
+            v_this = grid_v[base + offset]
+            weight = W_p2g[p][i, j]
+            v_p += alpha * weight * (v_next - v_this) + (1 - alpha) * weight * v_next
+        v[p] = v_p
+
+    # NOTE: need to reset grid_mv again before Alg.1 line 19
+    for i, j in grid_m:
+        grid_mv[i, j] = [0, 0]
+
+    # TLMPM contacts, Alg. 1, line 19
+    for p in x_config:
+        base = (x_config[p] * inv_dx - 0.5).cast(int)
+        for i, j in ti.static(ti.ndrange(3, 3)):  # Loop over 3x3 grid node neighborhood
+            offset = ti.Vector([i, j])
+            grid_mv[base + offset] += p_mass * W_p2g[p][i, j] * v[p]
+
+    for i, j in grid_m:
+        if grid_m[i, j] > 0:
+            grid_v[i, j] = grid_mv[i, j] / grid_m[i, j]
+
+
+@ti.kernel
+def g2p():
+
+    for p in x_config:
+        base = (x_config[p] * inv_dx - 0.5).cast(int)
+        for i, j in ti.static(ti.ndrange(3, 3)):  # Loop over 3x3 grid node neighborhood
+            offset = ti.Vector([i, j])
+            weight = W_p2g[p][i, j]
+            # TLMPM contacts, Alg. 1, line 28
+            x_render[p] += dt * weight * grid_v[base + offset]
+
 
 #     # Particle state update and scatter to grid (P2G)
 #     for p in x:
@@ -200,56 +298,69 @@ print(max_nodal_mass[None])
 #         x[p] += dt * v[p]  # advection
 
 
-# @ti.kernel
-# def render():
-#     for i in range(group_size):
-#         jelly[i] = x[i]
-#         # water[i] = x[i]
-#         # jelly[i] = x[i + group_size]
-#         # snow[i] = x[i + 2 * group_size]
+@ti.kernel
+def render():
+    for i in range(group_size):
+        jelly[i] = x_render[i]
+        # water[i] = x[i]
+        # jelly[i] = x[i + group_size]
+        # snow[i] = x[i + 2 * group_size]
 
 
 # print(
 #     "[Hint] Use WSAD/arrow keys to control gravity. Use left/right mouse bottons to attract/repel. Press R to initialization."
 # )
 
-# res = (512, 512)
-# window = ti.ui.Window("Taichi MLS-MPM-128", res=res, vsync=True)
-# canvas = window.get_canvas()
-# radius = 0.003
+res = (512, 512)
+window = ti.ui.Window("Taichi MLS-MPM-128", res=res, vsync=True)
+canvas = window.get_canvas()
+radius = 0.003
 
 # initialization()
 # gravity[None] = [0, -1]
 
 
-# while window.running:
-#     if window.get_event(ti.ui.PRESS):
-#         if window.event.key == "r":
-#             initialization()
-#         elif window.event.key in [ti.ui.ESCAPE]:
-#             break
-#     # if window.event is not None:
-#     #     gravity[None] = [0, 0]  # if had any event
-#     # if window.is_pressed(ti.ui.LEFT, "a"):
-#     #     gravity[None][0] = -1
-#     # if window.is_pressed(ti.ui.RIGHT, "d"):
-#     #     gravity[None][0] = 1
-#     # if window.is_pressed(ti.ui.UP, "w"):
-#     #     gravity[None][1] = 1
-#     # if window.is_pressed(ti.ui.DOWN, "s"):
-#     #     gravity[None][1] = -1
-#     mouse = window.get_cursor_pos()
-#     mouse_circle[0] = ti.Vector([mouse[0], mouse[1]])
-#     canvas.circles(mouse_circle, color=(0.2, 0.4, 0.6), radius=0.05)
-#     attractor_pos[None] = [mouse[0], mouse[1]]
-#     attractor_strength[None] = 0
-#     if window.is_pressed(ti.ui.LMB):
-#         attractor_strength[None] = 1
-#     if window.is_pressed(ti.ui.RMB):
-#         attractor_strength[None] = -1
+while window.running:
+    if window.get_event(ti.ui.PRESS):
+        if window.event.key == "r":
+            initialization()
+        elif window.event.key in [ti.ui.ESCAPE]:
+            break
+    #     # if window.event is not None:
+    #     #     gravity[None] = [0, 0]  # if had any event
+    #     # if window.is_pressed(ti.ui.LEFT, "a"):
+    #     #     gravity[None][0] = -1
+    #     # if window.is_pressed(ti.ui.RIGHT, "d"):
+    #     #     gravity[None][0] = 1
+    #     # if window.is_pressed(ti.ui.UP, "w"):
+    #     #     gravity[None][1] = 1
+    #     # if window.is_pressed(ti.ui.DOWN, "s"):
+    #     #     gravity[None][1] = -1
+    #     mouse = window.get_cursor_pos()
+    #     mouse_circle[0] = ti.Vector([mouse[0], mouse[1]])
+    #     canvas.circles(mouse_circle, color=(0.2, 0.4, 0.6), radius=0.05)
+    #     attractor_pos[None] = [mouse[0], mouse[1]]
+    #     attractor_strength[None] = 0
+    #     if window.is_pressed(ti.ui.LMB):
+    #         attractor_strength[None] = 1
+    #     if window.is_pressed(ti.ui.RMB):
+    #         attractor_strength[None] = -1
 
-#     for s in range(int(2e-3 // dt)):
-#         substep()
-#     render()
-#     canvas.set_background_color((0.067, 0.184, 0.255))
-#     # canvas.circles(water, radius=radius, color=(0
+    # print(x_config[0])
+    # print(x_render[0])
+    # print(v[0])
+
+    for s in range(int(2e-3 // dt)):
+        reset_grid()
+        p2g()
+        update_momenta()
+        # # try:
+        update_particle_and_grid_velocity()
+        # except:
+        #     pass
+        g2p()
+
+    render()
+    canvas.set_background_color((0.067, 0.184, 0.255))
+    canvas.circles(jelly, radius=radius, color=(0.93, 0.33, 0.23))
+    window.show()
