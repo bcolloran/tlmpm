@@ -43,6 +43,9 @@ jelly = ti.Vector.field(2, dtype=float, shape=group_size)  # position
 mouse_circle = ti.Vector.field(2, dtype=float, shape=(1,))
 
 
+max_nodal_mass = ti.field(dtype=float, shape=())
+
+
 @ti.kernel
 def substep():
     # clear grid
@@ -80,6 +83,9 @@ def substep():
             weight = w[i][0] * w[j][1]
             grid_v[base + offset] += weight * (p_mass * v[p] + affine @ dpos)
             grid_m[base + offset] += weight * p_mass
+
+    for i, j in grid_m:
+        ti.atomic_max(max_nodal_mass[None], grid_m[i, j])
 
     # update grid
     for i, j in grid_m:
@@ -186,3 +192,5 @@ while window.running:
     canvas.circles(jelly, radius=radius, color=(0.93, 0.33, 0.23))
     # canvas.circles(snow, radius=radius, color=(1, 1, 1))
     window.show()
+
+    print(max_nodal_mass[None])
