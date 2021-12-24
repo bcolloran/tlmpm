@@ -5,18 +5,30 @@ import taichi as ti
 ti.init(arch=ti.gpu)  # Try to run on GPU
 
 quality = 1  # Use a larger value for higher-res simulations
-n_particles = 3000 * quality ** 2
+# n_particles = 3000 * quality ** 2
 n_grid = 128 * quality
 dx = 1 / n_grid
 inv_dx = float(n_grid)
 dt = 1e-4 / quality
-p_vol = (dx * 0.5) ** 2
+p_vol = (dx * 0.5) ** 2  # implies four particles per grid cell
 p_rho = 1
 p_mass = p_vol * p_rho
 E = 5e3  # Young's modulus
 nu = 0.2  # Poisson's ratio
 mu_0 = E / (2 * (1 + nu))
 lambda_0 = E * nu / ((1 + nu) * (1 - 2 * nu))  # Lame parameters
+
+########
+bar_height_grid_cells = n_grid / 4
+bar_width_grid_cells = n_grid / 8
+
+n_particles = int(4 * bar_height_grid_cells * bar_width_grid_cells)
+print("n_particles", n_particles)
+
+bar_height = bar_height_grid_cells * dx
+bar_width = bar_width_grid_cells * dx
+########
+
 
 x = ti.Vector.field(2, dtype=float, shape=n_particles)  # position
 v = ti.Vector.field(2, dtype=float, shape=n_particles)  # velocity
@@ -45,6 +57,27 @@ mouse_circle = ti.Vector.field(2, dtype=float, shape=(1,))
 
 
 max_nodal_mass = ti.field(dtype=float, shape=())
+
+
+@ti.kernel
+def reset():
+    for p in range(n_particles):
+        # NOTE: "2.0"s in expression below are to account for 2 points per cell
+        # horizontally*vertically = 4 points per cell
+        i = int(p % (bar_width_grid_cells * 2))
+        j = int(p / (bar_width_grid_cells * 2))
+        x[p] = [
+            0.5 + i * dx / 2.0 - 0.5 * bar_width,
+            0.5 + j * dx / 2.0 - 0.5 * bar_height,
+        ]
+        # material[p] = i // group_size  # 0: fluid, 1: jelly, 2: snow
+        center_offset = x[p] - ti.Vector([0.5, 0.5])
+        material[p] = 1  # 0: fluid, 1: jelly, 2: snow
+        # v[p] = [0, 0]
+        v[p] = 50 * ti.Vector([center_offset[1], -center_offset[0]])
+        F[p] = ti.Matrix([[1, 0], [0, 1]])
+        Jp[p] = 1
+        C[p] = ti.Matrix.zero(float, 2, 2)
 
 
 @ti.kernel
@@ -124,24 +157,6 @@ def substep():
 
 
 @ti.kernel
-def reset():
-    for i in range(n_particles):
-        x[i] = [
-            0.5 + (ti.random() - 0.5) * 0.1,
-            0.5 + (ti.random() - 0.5) * 0.3,
-            # ti.random() * 0.2 + 0.5 + 0.32 * (i // group_size),
-        ]
-        # material[i] = i // group_size  # 0: fluid, 1: jelly, 2: snow
-        center_offset = x[i] - ti.Vector([0.5, 0.5])
-        material[i] = 1  # 0: fluid, 1: jelly, 2: snow
-        # v[i] = [0, 0]
-        v[i] = 50 * ti.Vector([center_offset[1], -center_offset[0]])
-        F[i] = ti.Matrix([[1, 0], [0, 1]])
-        Jp[i] = 1
-        C[i] = ti.Matrix.zero(float, 2, 2)
-
-
-@ti.kernel
 def render():
     for i in range(group_size):
         jelly[i] = x[i]
@@ -161,7 +176,9 @@ radius = 0.003
 
 reset()
 
-while window.running:
+frame = 0
+while window.running and frame < 600:
+    frame += 1
     if window.get_event(ti.ui.PRESS):
         if window.event.key == "r":
             reset()
