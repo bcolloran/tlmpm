@@ -19,8 +19,8 @@ mu_0 = E / (2 * (1 + nu))
 lambda_0 = E * nu / ((1 + nu) * (1 - 2 * nu))  # Lame parameters
 
 ########
-bar_height_grid_cells = n_grid / 4
-bar_width_grid_cells = n_grid / 8
+bar_height_grid_cells = n_grid / 64
+bar_width_grid_cells = n_grid / 32
 
 n_particles = int(4 * bar_height_grid_cells * bar_width_grid_cells)
 print("n_particles", n_particles)
@@ -64,17 +64,17 @@ def reset():
     for p in range(n_particles):
         # NOTE: "2.0"s in expression below are to account for 2 points per cell
         # horizontally*vertically = 4 points per cell
-        i = int(p % (bar_width_grid_cells * 2))
-        j = int(p / (bar_width_grid_cells * 2))
+        i = int(p % (bar_width_grid_cells * 2.0))
+        j = int(p / (bar_width_grid_cells * 2.0))
         x[p] = [
-            0.5 + i * dx / 2.0 - 0.5 * bar_width,
-            0.5 + j * dx / 2.0 - 0.5 * bar_height,
+            0.25 * dx + 0.5 + i * dx / 2.0 - 0.5 * bar_width,
+            0.25 * dx + 0.5 + j * dx / 2.0 - 0.5 * bar_height,
         ]
         # material[p] = i // group_size  # 0: fluid, 1: jelly, 2: snow
         center_offset = x[p] - ti.Vector([0.5, 0.5])
         material[p] = 1  # 0: fluid, 1: jelly, 2: snow
         # v[p] = [0, 0]
-        v[p] = 50 * ti.Vector([center_offset[1], -center_offset[0]])
+        v[p] = 50.0 * ti.Vector([center_offset[1], -center_offset[0]])
         F[p] = ti.Matrix([[1, 0], [0, 1]])
         Jp[p] = 1
         C[p] = ti.Matrix.zero(float, 2, 2)
@@ -116,6 +116,7 @@ def substep():
             dpos = (offset.cast(float) - fx) * dx
             weight = w[i][0] * w[j][1]
             grid_v[base + offset] += weight * (p_mass * v[p] + affine @ dpos)
+            # grid_v[base + offset] += weight * p_mass * v[p]
             grid_m[base + offset] += weight * p_mass
 
     for i, j in grid_m:
@@ -172,12 +173,12 @@ print(
 res = (512, 512)
 window = ti.ui.Window("Taichi MLS-MPM-128", res=res, vsync=True)
 canvas = window.get_canvas()
-radius = 0.003
+radius = 0.002
 
 reset()
 
 frame = 0
-while window.running and frame < 600:
+while window.running and frame < 600000:
     frame += 1
     if window.get_event(ti.ui.PRESS):
         if window.event.key == "r":
@@ -213,4 +214,4 @@ while window.running and frame < 600:
     # canvas.circles(snow, radius=radius, color=(1, 1, 1))
     window.show()
 
-    print(max_nodal_mass[None])
+    # print(max_nodal_mass[None])

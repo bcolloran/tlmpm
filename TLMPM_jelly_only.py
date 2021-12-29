@@ -5,7 +5,7 @@ import taichi as ti
 ti.init(arch=ti.gpu)  # Try to run on GPU
 
 quality = 1  # Use a larger value for higher-res simulations
-n_particles = 3000 * quality ** 2
+# n_particles = 3000 * quality ** 2
 n_grid = 128 * quality
 dx = 1 / n_grid
 inv_dx = float(n_grid)
@@ -18,14 +18,30 @@ nu = 0.2  # Poisson's ratio
 mu_0 = E / (2 * (1 + nu))
 lambda_0 = E * nu / ((1 + nu) * (1 - 2 * nu))  # Lame parameters
 
-x_config = ti.Vector.field(2, dtype=float, shape=n_particles)  # position
-x_render = ti.Vector.field(2, dtype=float, shape=n_particles)  # position
+########
+# bar_height_grid_cells = n_grid / 64
+# bar_width_grid_cells = n_grid / 32
+bar_height_grid_cells = n_grid / 16
+bar_width_grid_cells = n_grid / 8
 
-C = ti.Matrix.field(2, 2, dtype=float, shape=n_particles)  # affine velocity field
+
+n_particles = int(4 * bar_height_grid_cells * bar_width_grid_cells)
+print("n_particles", n_particles)
+
+bar_height = bar_height_grid_cells * dx
+bar_width = bar_width_grid_cells * dx
+
+V_0 = p_vol
+########
+
+
+x_config = ti.Vector.field(2, dtype=float, shape=n_particles)  # position
+x_world = ti.Vector.field(2, dtype=float, shape=n_particles)  # position
+v = ti.Vector.field(2, dtype=float, shape=n_particles)  # velocity
+# C = ti.Matrix.field(2, 2, dtype=float, shape=n_particles)  # affine velocity field
 F = ti.Matrix.field(2, 2, dtype=float, shape=n_particles)  # deformation gradient
 Pk = ti.Matrix.field(2, 2, dtype=float, shape=n_particles)  # pk stresses
-material = ti.field(dtype=int, shape=n_particles)  # material id
-Jp = ti.field(dtype=float, shape=n_particles)  # plastic deformation
+# Jp = ti.field(dtype=float, shape=n_particles)  # plastic deformation
 
 W_p2g = ti.Matrix.field(3, 3, dtype=float, shape=n_particles)
 W_grad_x_p2g = ti.Matrix.field(3, 3, dtype=float, shape=n_particles)
@@ -50,15 +66,8 @@ max_nodal_mass = ti.field(dtype=float, shape=())
 
 alpha = 0.99
 
-# group_size = n_particles // 3
-group_size = n_particles
-# water = ti.Vector.field(2, dtype=float, shape=group_size)  # position
-jelly = ti.Vector.field(2, dtype=float, shape=group_size)  # position
-# snow = ti.Vector.field(2, dtype=float, shape=group_size)  # position
 mouse_circle = ti.Vector.field(2, dtype=float, shape=(1,))
 
-
-v = ti.Vector.field(2, dtype=float, shape=n_particles)  # velocity
 
 ################################################################################
 # init
@@ -68,50 +77,88 @@ v = ti.Vector.field(2, dtype=float, shape=n_particles)  # velocity
 @ti.kernel
 def initialization():
     for p in range(n_particles):
+        # NOTE: "2.0"s in expression below are to account for 2 points per cell
+        # horizontally*vertically = 4 points per cell
+        i = int(p % (bar_width_grid_cells * 2.0))
+        j = int(p / (bar_width_grid_cells * 2.0))
+        # NOTE: "0.25 * dx" is to offset points to interior of cells (quadrature points)
         x_config[p] = [
-            0.5 + (ti.random() - 0.5) * 0.1,
-            0.5 + (ti.random() - 0.5) * 0.3,
-            # ti.random() * 0.2 + 0.5 + 0.32 * (i // group_size),
+            0.25 * dx + 0.5 + i * dx / 2.0 - 0.5 * bar_width,
+            0.25 * dx + 0.5 + j * dx / 2.0 - 0.5 * bar_height,
         ]
-        x_render[p] = x_config[p]
-        # material[p] = i // group_size  # 0: fluid, 1: jelly, 2: snow
+        x_world[p] = x_config[p]
         center_offset = x_config[p] - ti.Vector([0.5, 0.5])
-        material[p] = 1  # 0: fluid, 1: jelly, 2: snow
-        # v[p] = [0, 0]
-        v[p] = 0.50 * ti.Vector([center_offset[1], -center_offset[0]])
+        v[p] = 50 * ti.Vector([center_offset[1], -center_offset[0]])
         F[p] = ti.Matrix([[1, 0], [0, 1]])
-        Jp[p] = 1
-        C[p] = ti.Matrix.zero(float, 2, 2)
+        # Jp[p] = 1
+        # C[p] = ti.Matrix.zero(float, 2, 2)
 
 
-@ti.func
+@ti.pyfunc
 def hat_kern_1d(x, x_I):
     # TLMPM contacts, eq 2.1
     abs_dist = ti.abs(x - x_I)
-    return (1 - abs_dist / dx) if abs_dist < dx else 0
+    return (1.0 - abs_dist / dx) if abs_dist < dx else 0.0
 
 
-@ti.func
+@ti.pyfunc
 def hat_kern_2d(x, x_I):
     # TLMPM contacts, eq 2.3
     return hat_kern_1d(x[0], x_I[0]) * hat_kern_1d(x[1], x_I[1])
 
 
-@ti.func
+@ti.pyfunc
 def hat_kern_derivative_1d(x, x_I):
     # TLMPM contacts, eq 2.2
     abs_dist = ti.abs(x - x_I)
-    sign = 1 if x > x_I else 0
-    return -sign / dx if abs_dist < dx else 0
+    sign = 1.0 if x > x_I else -1.0
+    return -sign / dx if abs_dist < dx else 0.0
 
 
-@ti.func
+@ti.pyfunc
 def hat_kern_derivative_2d(x, x_I):
     # TLMPM contacts, eq 2.3
     return [
         hat_kern_derivative_1d(x[0], x_I[0]) * hat_kern_1d(x[1], x_I[1]),
         hat_kern_1d(x[0], x_I[0]) * hat_kern_derivative_1d(x[1], x_I[1]),
     ]
+
+
+@ti.pyfunc
+def print_weight_diagnostics(p, i, j):
+    print("p:    ", p)
+    print("x_config:    ", x_config[p])
+    print("W_p2g:    ", W_p2g[p])
+    print("W_grad_x_p2g:    ", W_grad_x_p2g[p])
+    print("W_grad_y_p2g:    ", W_grad_y_p2g[p])
+    base = ti.floor(x_config[p] * inv_dx - 0.5)
+    print("base:    ", base)
+    print("F:    ", F[p])
+    print("Pk:    ", Pk[p])
+
+    offset = ti.Vector([i, j])
+    grid_pos = (base + offset) * dx
+
+    print("grid_pos:    ", grid_pos)
+    print("x_config[p] - grid_pos:    ", x_config[p] - grid_pos)
+    print("hat_kern_2d(x_config[p], grid_pos):    ", hat_kern_2d(x_config[p], grid_pos))
+    print(
+        "hat_kern_derivative_2d(x_config[p], grid_pos):    ",
+        hat_kern_derivative_2d(x_config[p], grid_pos),
+    )
+    weight_grad = ti.Vector([W_grad_x_p2g[p][i, j], W_grad_y_p2g[p][i, j]])
+    print("weight_grad:    ", weight_grad)
+    i0, j0 = base + offset
+    print("i0, j0:    ", i0, j0)
+    v_I = grid_v[i0, j0]
+    print("grid_v[i0, j0]:    ", grid_v[i0, j0])
+    print("grid_v_next_tmp[i0, j0]:    ", grid_v_next_tmp[i0, j0])
+    print("grid_mv[i0, j0]:    ", grid_mv[i0, j0])
+    print("grid_m[i0, j0]:    ", grid_m[i0, j0])
+    print("grid_f[i0, j0]:    ", grid_f[i0, j0])
+    print(
+        "dt * v_I.outer_product(weight_grad):    ", dt * v_I.outer_product(weight_grad)
+    )
 
 
 @ti.kernel
@@ -171,6 +218,7 @@ def reset_grid():
 
 @ti.kernel
 def p2g():
+    # print(Pk[0])
     # TLMPM contacts, Alg. 1, line 8-12
     for p in x_config:
         base = (x_config[p] * inv_dx - 0.5).cast(int)
@@ -178,17 +226,23 @@ def p2g():
             offset = ti.Vector([i, j])
             weighted_mass = p_mass * W_p2g[p][i, j]
             grid_mv[base + offset] += weighted_mass * v[p]
-            # force_external = weighted_mass * gravity[None]
+            force_external = weighted_mass * gravity[None]
+            # TLMPM contacts, Alg. 1, line 11 ;
+            weight_grad = ti.Vector([W_grad_x_p2g[p][i, j], W_grad_y_p2g[p][i, j]])
+            force_internal = -V_0 * Pk[p] @ weight_grad
             # force_internal = ti.Vector([0.0, 0.0])
-            # grid_f[base + offset] += force_external + force_internal
+            grid_f[base + offset] += force_external + force_internal
 
 
 @ti.kernel
 def update_momenta():
+    for i, j in grid_m:
+        if grid_m[i, j] > 0:
+            grid_v[i, j] = grid_mv[i, j] / grid_m[i, j]
     # TLMPM contacts, Alg. 1, line 14, 17
     for i, j in grid_m:
         if grid_m[i, j] > 0:
-            grid_v_next_tmp[i, j] = (grid_mv[i, j] + grid_f[i, j] * dt) / grid_m[i, j]
+            grid_v_next_tmp[i, j] = grid_v[i, j] + grid_f[i, j] * dt / grid_m[i, j]
 
 
 @ti.kernel
@@ -226,101 +280,67 @@ def g2p():
 
     for p in x_config:
         base = (x_config[p] * inv_dx - 0.5).cast(int)
+
+        v_I = ti.Vector([0.0, 0.0])
         for i, j in ti.static(ti.ndrange(3, 3)):  # Loop over 3x3 grid node neighborhood
             offset = ti.Vector([i, j])
             weight = W_p2g[p][i, j]
+            v_I = grid_v[base + offset]
+
+            # TLMPM contacts, Alg. 1, line 23-24; see MPM after 25 yrs, eq 2.70
+            weight_grad = ti.Vector([W_grad_x_p2g[p][i, j], W_grad_y_p2g[p][i, j]])
+            # print(weight_grad)
+            F[p] += dt * v_I.outer_product(weight_grad)
+            # NOTE: skipping TLMPM contacts, Alg. 1, line 25-26;
+            #  don't seem to be needed for Neo-Hookean constitutive model
+
             # TLMPM contacts, Alg. 1, line 28
-            x_render[p] += dt * weight * grid_v[base + offset]
+            x_world[p] += dt * weight * v_I
 
+        # TLMPM contacts, Alg. 1, line 27-ish;
+        # NOTE: computing PK stress, but using TLMPM 2020, eq 24 (Neo-Hookean)
+        # NOTE: skipping TLMPM contacts, Alg. 1, line 25-26;
+        # don't seem to be needed for Neo-Hookean constitutive model
 
-#     # Particle state update and scatter to grid (P2G)
-#     for p in x:
-#         base = (x[p] * inv_dx - 0.5).cast(int)
-#         fx = x[p] * inv_dx - base.cast(float)
-#         w = [0.5 * (1.5 - fx) ** 2, 0.75 - (fx - 1) ** 2, 0.5 * (fx - 0.5) ** 2]
-#         F[p] = (ti.Matrix.identity(float, 2) + dt * C[p]) @ F[
-#             p
-#         ]  # deformation gradient update
+        # F_t = ti.Matrix.identity(float, 2)
+        # F_t2 = ti.Matrix.identity(float, 2)
+        # F_t += (x_world[p] - x_config[p]).outer_product(weight_grad)
+        # F_t2 += weight_grad.outer_product(x_world[p] - x_config[p])
 
-#         h = 1
-#         mu, la = mu_0 * h, lambda_0 * h
-#         U, sig, V = ti.svd(F[p])
-#         J = 1.0
-#         for d in ti.static(range(2)):
-#             new_sig = sig[d, d]
-#             Jp[p] *= sig[d, d] / new_sig
-#             sig[d, d] = new_sig
-#             J *= new_sig
-#         stress = 2 * mu * (F[p] - U @ V.transpose()) @ F[
-#             p
-#         ].transpose() + ti.Matrix.identity(float, 2) * la * J * (J - 1)
-#         stress = (-dt * p_vol * 4 * inv_dx * inv_dx) * stress
-#         affine = stress + p_mass * C[p]
-#         for i, j in ti.static(ti.ndrange(3, 3)):  # Loop over 3x3 grid node neighborhood
-#             offset = ti.Vector([i, j])
-#             dpos = (offset.cast(float) - fx) * dx
-#             weight = w[i][0] * w[j][1]
-#             grid_v[base + offset] += weight * (p_mass * v[p] + affine @ dpos)
-#             grid_m[base + offset] += weight * p_mass
+        F_inv_trans = F[p].inverse().transpose()
+        # print("F[p]", F[p], "F_inv_trans", F_inv_trans)
+        J = F[p].determinant()
 
-#     # update grid
-#     for i, j in grid_m:
-#         if grid_m[i, j] > 0:  # No need for epsilon here
-#             grid_v[i, j] = (1 / grid_m[i, j]) * grid_v[i, j]  # Momentum to velocity
-#             grid_v[i, j] += dt * gravity[None] * 30  # gravity
-#             dist = attractor_pos[None] - dx * ti.Vector([i, j])
-#             grid_v[i, j] += (
-#                 dist / (0.01 + dist.norm()) * attractor_strength[None] * dt * 100
-#             )
-#             if i < 3 and grid_v[i, j][0] < 0:
-#                 grid_v[i, j][0] = 0  # Boundary conditions
-#             if i > n_grid - 3 and grid_v[i, j][0] > 0:
-#                 grid_v[i, j][0] = 0
-#             if j < 3 and grid_v[i, j][1] < 0:
-#                 grid_v[i, j][1] = 0
-#             if j > n_grid - 3 and grid_v[i, j][1] > 0:
-#                 grid_v[i, j][1] = 0
+        Pk[p] = mu_0 * (F[p] - F_inv_trans) + lambda_0 * ti.log(J) * F_inv_trans
+        # print(
+        #     # "v_I",
+        #     # v_I,
+        #     # "F_t",
+        #     # F_t,
+        #     # "F_t2",
+        #     # F_t2,
+        #     "F[p]",
+        #     F[p],
+        #     "F_inv_trans",
+        #     F_inv_trans,
+        #     "J",
+        #     J,
+        #     "ti.log(J)",
+        #     ti.log(J),
+        #     "Pk[p]",
+        #     Pk[p],
+        # )
 
-#     # grid to particle (G2P)
-#     for p in x:
-#         base = (x[p] * inv_dx - 0.5).cast(int)
-#         fx = x[p] * inv_dx - base.cast(float)
-#         w = [0.5 * (1.5 - fx) ** 2, 0.75 - (fx - 1.0) ** 2, 0.5 * (fx - 0.5) ** 2]
-#         new_v = ti.Vector.zero(float, 2)
-#         new_C = ti.Matrix.zero(float, 2, 2)
-#         for i, j in ti.static(ti.ndrange(3, 3)):  # loop over 3x3 grid node neighborhood
-#             dpos = ti.Vector([i, j]).cast(float) - fx
-#             g_v = grid_v[base + ti.Vector([i, j])]
-#             weight = w[i][0] * w[j][1]
-#             new_v += weight * g_v
-#             new_C += 4 * inv_dx * weight * g_v.outer_product(dpos)
-#         v[p], C[p] = new_v, new_C
-#         x[p] += dt * v[p]  # advection
-
-
-@ti.kernel
-def render():
-    for i in range(group_size):
-        jelly[i] = x_render[i]
-        # water[i] = x[i]
-        # jelly[i] = x[i + group_size]
-        # snow[i] = x[i + 2 * group_size]
-
-
-# print(
-#     "[Hint] Use WSAD/arrow keys to control gravity. Use left/right mouse bottons to attract/repel. Press R to initialization."
-# )
 
 res = (512, 512)
-window = ti.ui.Window("Taichi MLS-MPM-128", res=res, vsync=True)
+window = ti.ui.Window("Taichi TLMPM", res=res, vsync=True)
 canvas = window.get_canvas()
-radius = 0.003
-
-# initialization()
-# gravity[None] = [0, -1]
+radius = 0.002
 
 
-while window.running:
+frame = 0
+while window.running and frame < 60000:
+    frame += 1
     if window.get_event(ti.ui.PRESS):
         if window.event.key == "r":
             initialization()
@@ -345,22 +365,34 @@ while window.running:
     #         attractor_strength[None] = 1
     #     if window.is_pressed(ti.ui.RMB):
     #         attractor_strength[None] = -1
-
     # print(x_config[0])
-    # print(x_render[0])
-    # print(v[0])
+    # print(x_world[0])
 
     for s in range(int(2e-3 // dt)):
         reset_grid()
-        p2g()
-        update_momenta()
-        # # try:
-        update_particle_and_grid_velocity()
-        # except:
-        #     pass
-        g2p()
+        # print(f"\n========= substep {s};  after reset_grid   ========")
+        # print_weight_diagnostics(4, 1, 1)
 
-    render()
+        p2g()
+        # print(f"\n========= substep {s};  after p2g   ========")
+        # print_weight_diagnostics(4, 1, 1)
+
+        update_momenta()
+        # print(f"\n========= substep {s};  after update_momenta   ========")
+        # print_weight_diagnostics(4, 1, 1)
+
+        update_particle_and_grid_velocity()
+        # print(
+        #     f"\n========= substep {s};  after update_particle_and_grid_velocity   ========"
+        # )
+        # print_weight_diagnostics(4, 1, 1)
+
+        g2p()
+        # print(f"\n========= substep {s};  after g2p   ========")
+        # print_weight_diagnostics(4, 1, 1)
+
     canvas.set_background_color((0.067, 0.184, 0.255))
-    canvas.circles(jelly, radius=radius, color=(0.93, 0.33, 0.23))
+    canvas.circles(x_world, radius=radius, color=(0.93, 0.33, 0.23))
     window.show()
+# print(W_p2g[0])
+# print(W_p2g[20])
