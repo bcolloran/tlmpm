@@ -2,7 +2,7 @@ import taichi as ti
 
 ti.init(arch=ti.gpu)  # Try to run on GPU
 
-quality = 1  # Use a larger value for higher-res simulations
+quality = 3  # Use a larger value for higher-res simulations
 # n_particles = 3000 * quality ** 2
 n_grid = 128 * quality
 dx = 1 / n_grid  # grid spacing
@@ -19,8 +19,8 @@ mu_0 = E / (2 * (1 + nu))
 lambda_0 = E * nu / ((1 + nu) * (1 - 2 * nu))  # Lame parameters
 
 ########
-bar_height_grid_cells = n_grid / 8
-bar_width_grid_cells = n_grid / 4
+bar_height_grid_cells = n_grid / 4
+bar_width_grid_cells = n_grid / 2
 
 n_particles = int(particles_per_cell * bar_height_grid_cells * bar_width_grid_cells)
 print("n_particles", n_particles)
