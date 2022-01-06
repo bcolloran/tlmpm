@@ -16,6 +16,8 @@ NOTE: changing g2p to iterate over a `ti.ndrange` kills performance:
 
 NOTE: In `g2p_only_cells_in_range`, iterating over the full `x_config` rather than `ti.ndrange(*particle_field_shape)` causes NaNs to creep in. However, `g2p_only_cells_in_range` achieve ~110fps even iterating over the `ndrange`. But even better: simply screening out inactive particles with `if x_active[f, g] != 0.0:` gets us up to ~150fps
 
+NOTE: applying the "in range only" treatment to `update_particle_and_grid_velocity` gets another solid performance gain, up to ~190fps (though unstable, bouncing from 180-200fps)
+
 """
 
 ti.init(arch=ti.gpu, dynamic_index=False)  # Try to run on GPU
@@ -162,13 +164,18 @@ def particle_index_to_grid_base(f, g):
 
 
 @ti.pyfunc
-def particle_index_to_grid_lower_left_in_range(f, g):
-    return ti.Vector([f - 1 // 2, g - 1 // 2])
+def particle_index_to_lower_left_cell_index_in_range(f, g):
+    return (f - 1) // 2, (g - 1) // 2
 
 
 @ti.pyfunc
 def grid_index_to_particle_base(f, g):
     return 2 * ti.Vector([f, g]) - 1
+
+
+@ti.pyfunc
+def W_stencil_index_from_ij_fg(i, j, f, g):
+    return (f - (2 * i - 1), g - (2 * j - 1))
 
 
 @ti.kernel
@@ -420,6 +427,44 @@ def update_particle_and_grid_velocity():
 
 
 @ti.kernel
+def update_particle_and_grid_velocity_only_cells_in_range():
+    # TLMPM contacts, Alg. 1, line 18
+    for f, g in v:
+        if x_active[f, g] != 0.0:
+            v_p = v[f, g] * alpha
+            i_base, j_base = particle_index_to_lower_left_cell_index_in_range(f, g)
+            for i_off, j_off in ti.static(ti.ndrange(2, 2)):
+                i = i_base + i_off
+                j = j_base + j_off
+                v_next = grid_v_next_tmp[i, j]
+                v_this = grid_v[i, j]
+                f_stencil, g_stencil = W_stencil_index_from_ij_fg(i, j, f, g)
+                weight = W_stencil[f_stencil, g_stencil]
+                v_p += (
+                    alpha * weight * (v_next - v_this) + (1 - alpha) * weight * v_next
+                )
+            v[f, g] = v_p
+
+    # NOTE: need to reset grid_mv again before Alg.1 line 19
+    for i, j in grid_m:
+        grid_mv[i, j] = [0, 0]
+
+    # TLMPM contacts, Alg. 1, line 19
+    for f, g in v:
+        if x_active[f, g] != 0.0:
+            i_base, j_base = particle_index_to_lower_left_cell_index_in_range(f, g)
+            for i_off, j_off in ti.static(ti.ndrange(2, 2)):
+                i = i_base + i_off
+                j = j_base + j_off
+                f_stencil, g_stencil = W_stencil_index_from_ij_fg(i, j, f, g)
+                grid_mv[i, j] += p_mass * W_stencil[f_stencil, g_stencil] * v[f, g]
+
+    for i, j in grid_m:
+        if grid_m[i, j] > 0:
+            grid_v[i, j] = grid_mv[i, j] / grid_m[i, j]
+
+
+@ti.kernel
 def g2p():
     for f, g in x_config:
         # for f, g in ti.ndrange(*particle_field_shape):
@@ -451,25 +496,13 @@ def g2p():
         J = F[f, g].determinant()
 
         Pk[f, g] = mu_0 * (F[f, g] - F_inv_trans) + lambda_0 * ti.log(J) * F_inv_trans
-        # if f == 5 and g == 5:
-        #     print("basic")
-        #     print(F[f, g])
-        #     print(x_world[f, g])
-        #     print(Pk[f, g])
-
-
-@ti.pyfunc
-def W_stencil_index_from_ij_fg(i, j, f, g):
-    return (f - (2 * i - 1), g - (2 * j - 1))
 
 
 @ti.kernel
 def g2p_only_cells_in_range():
     for f, g in x_config:
-        # for f, g in ti.ndrange(*particle_field_shape):
         if x_active[f, g] != 0.0:
-            i_base = (f - 1) // 2
-            j_base = (g - 1) // 2
+            i_base, j_base = particle_index_to_lower_left_cell_index_in_range(f, g)
 
             # we don't actually need to loop over a 3x3 neighborhood;
             # for a kernel with radius dx (i.e with radius equal to grid spacing)
@@ -507,18 +540,13 @@ def g2p_only_cells_in_range():
             Pk[f, g] = (
                 mu_0 * (F[f, g] - F_inv_trans) + lambda_0 * ti.log(J) * F_inv_trans
             )
-            # if f == 5 and g == 5:
-            #     print("only in range")
-            #     print(F[f, g])
-            #     print(x_world[f, g])
-            #     print(Pk[f, g])
 
 
 @ti.kernel
 def update_render_buffer():
-    # for f, g in x_world:
-    for f, g in ti.ndrange(*particle_field_shape):
-        x_render[f + g * particle_field_shape[0]] = x_world[f, g]
+    for f, g in x_world:
+        if x_active[f, g] != 0.0:
+            x_render[f + g * particle_field_shape[0]] = x_world[f, g]
 
 
 res = (512, 512)
@@ -543,7 +571,8 @@ while window.running and frame < 60000:
             reset_grid()
             p2g()
         update_momenta()
-        update_particle_and_grid_velocity()
+        # update_particle_and_grid_velocity()
+        update_particle_and_grid_velocity_only_cells_in_range()
         # g2p()
         g2p_only_cells_in_range()
     update_render_buffer()
