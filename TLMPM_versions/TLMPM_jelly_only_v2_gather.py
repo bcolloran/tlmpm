@@ -6,10 +6,19 @@ NOTE: In this variant, we attempt to use a "gather" strategy rather than "scatte
 
 NOTE: to make this work, we add some "padding" particles around the edge of the jelly bar, otherwise grid nodes at the boundary would attempt to access non-existent particles.
 
-NOTE: using gather just in p2g nearly doubles speed: ~65fps -> 108fps
+NOTE: using gather in p2g nearly doubles speed: ~65fps -> 108fps
+
+NOTE: g2p does not need to change drastically because it already gathers to particles from cells. That said, perhaps we can simplify the kernel handling.
+
+NOTE: changing g2p to iterate over a `ti.ndrange` kills performance:
+    `for f, g in x_config:` -> ~120 fps
+    `for f, g in ti.ndrange(*particle_field_shape):` -> ~40fps
+
+NOTE: In `g2p_only_cells_in_range`, iterating over the full `x_config` rather than `ti.ndrange(*particle_field_shape)` causes NaNs to creep in. However, `g2p_only_cells_in_range` achieve ~110fps even iterating over the `ndrange`. But even better: simply screening out inactive particles with `if x_active[f, g] != 0.0:` gets us up to ~150fps
+
 """
 
-ti.init(arch=ti.gpu)  # Try to run on GPU
+ti.init(arch=ti.gpu, dynamic_index=False)  # Try to run on GPU
 
 quality = 3  # Use a larger value for higher-res simulations
 # n_particles = 3000 * quality ** 2
@@ -104,9 +113,13 @@ grid_f = ti.Vector.field(
 )  # grid forces
 
 
-W_stencil = ti.Matrix.field(4, 4, dtype=float, shape=())
-W_stencil_grad_x = ti.Matrix.field(4, 4, dtype=float, shape=())
-W_stencil_grad_y = ti.Matrix.field(4, 4, dtype=float, shape=())
+# W_stencil = ti.Matrix.field(4, 4, dtype=float, shape=())
+# W_stencil_grad_x = ti.Matrix.field(4, 4, dtype=float, shape=())
+# W_stencil_grad_y = ti.Matrix.field(4, 4, dtype=float, shape=())
+
+W_stencil = ti.field(dtype=float, shape=(4, 4))
+W_stencil_grad_x = ti.field(dtype=float, shape=(4, 4))
+W_stencil_grad_y = ti.field(dtype=float, shape=(4, 4))
 
 gravity = ti.Vector.field(2, dtype=float, shape=())
 gravity[None] = [0, 0]
@@ -146,6 +159,11 @@ def grid_index_to_center_pos(i, j):
 @ti.pyfunc
 def particle_index_to_grid_base(f, g):
     return ti.Vector([f // 2, g // 2]) - 1
+
+
+@ti.pyfunc
+def particle_index_to_grid_lower_left_in_range(f, g):
+    return ti.Vector([f - 1 // 2, g - 1 // 2])
 
 
 @ti.pyfunc
@@ -265,10 +283,10 @@ def init_cell_stencil_weights_and_grads():
     particle_base = grid_index_to_particle_base(1, 1)
     for f_off, g_off in ti.static(ti.ndrange(4, 4)):
         x_pos = x_config[f_off + particle_base[0], g_off + particle_base[1]]
-        W_stencil[None][f_off, g_off] = hat_kern_2d(x_pos, grid_pos)
+        W_stencil[f_off, g_off] = hat_kern_2d(x_pos, grid_pos)
         W_grad = hat_kern_derivative_2d(x_pos, grid_pos)
-        W_stencil_grad_x[None][f_off, g_off] = W_grad[0]
-        W_stencil_grad_y[None][f_off, g_off] = W_grad[1]
+        W_stencil_grad_x[f_off, g_off] = W_grad[0]
+        W_stencil_grad_y[f_off, g_off] = W_grad[1]
 
 
 @ti.kernel
@@ -298,10 +316,6 @@ init_cell_stencil_weights_and_grads()
 compute_nodal_mass()
 init_grid_v()
 
-print(W_stencil[None])
-print(W_stencil_grad_x[None])
-print(W_stencil_grad_y[None])
-print(max_nodal_mass[None])
 
 ################################################################################
 # algorithm steps (TLMPM contacts, Alg. 1)
@@ -338,8 +352,11 @@ def p2g():
 
 @ti.kernel
 def p2g_gather():
-    # TLMPM contacts, Alg. 1, line 8-12
+    # NOTE: in the gather version, we can also do the grid reset within this kernel
+    # TLMPM contacts, Alg. 1, line 7-12
     for i, j in grid_m:
+        grid_mv[i, j] = [0, 0]
+        grid_f[i, j] = [0, 0]
         particle_base = grid_index_to_particle_base(i, j)
         for f_off, g_off in ti.static(ti.ndrange(4, 4)):
 
@@ -347,14 +364,14 @@ def p2g_gather():
             g = particle_base[1] + g_off
 
             active = x_active[f, g]
-            weighted_mass = p_mass * W_stencil[None][f_off, g_off] * active
+            weighted_mass = p_mass * W_stencil[f_off, g_off] * active
             grid_mv[i, j] += weighted_mass * v[f, g]
             force_external = weighted_mass * gravity[None]
             # TLMPM contacts, Alg. 1, line 11 ;
             weight_grad = ti.Vector(
                 [
-                    W_stencil_grad_x[None][f_off, g_off],
-                    W_stencil_grad_y[None][f_off, g_off],
+                    W_stencil_grad_x[f_off, g_off],
+                    W_stencil_grad_y[f_off, g_off],
                 ]
             )
             force_internal = -V_0 * Pk[f, g] @ weight_grad * active
@@ -405,6 +422,7 @@ def update_particle_and_grid_velocity():
 @ti.kernel
 def g2p():
     for f, g in x_config:
+        # for f, g in ti.ndrange(*particle_field_shape):
         base = particle_index_to_grid_base(f, g)
 
         v_I = ti.Vector([0.0, 0.0])
@@ -433,6 +451,67 @@ def g2p():
         J = F[f, g].determinant()
 
         Pk[f, g] = mu_0 * (F[f, g] - F_inv_trans) + lambda_0 * ti.log(J) * F_inv_trans
+        # if f == 5 and g == 5:
+        #     print("basic")
+        #     print(F[f, g])
+        #     print(x_world[f, g])
+        #     print(Pk[f, g])
+
+
+@ti.pyfunc
+def W_stencil_index_from_ij_fg(i, j, f, g):
+    return (f - (2 * i - 1), g - (2 * j - 1))
+
+
+@ti.kernel
+def g2p_only_cells_in_range():
+    for f, g in x_config:
+        # for f, g in ti.ndrange(*particle_field_shape):
+        if x_active[f, g] != 0.0:
+            i_base = (f - 1) // 2
+            j_base = (g - 1) // 2
+
+            # we don't actually need to loop over a 3x3 neighborhood;
+            # for a kernel with radius dx (i.e with radius equal to grid spacing)
+            # only _4_ grid nodes (2x2) will ever be in range
+            for i_off, j_off in ti.static(ti.ndrange(2, 2)):
+                i = i_base + i_off
+                j = j_base + j_off
+
+                f_stencil, g_stencil = W_stencil_index_from_ij_fg(i, j, f, g)
+
+                v_ij = grid_v[i, j]
+                weight = W_stencil[f_stencil, g_stencil]
+                # TLMPM contacts, Alg. 1, line 23-24; see MPM after 25 yrs, eq 2.70
+                weight_grad = ti.Vector(
+                    [
+                        W_stencil_grad_x[f_stencil, g_stencil],
+                        W_stencil_grad_y[f_stencil, g_stencil],
+                    ]
+                )
+                F[f, g] += dt * v_ij.outer_product(weight_grad)
+
+                # NOTE: skipping TLMPM contacts, Alg. 1, line 25-26;
+                #  don't seem to be needed for Neo-Hookean constitutive model
+
+                # TLMPM contacts, Alg. 1, line 28
+                x_world[f, g] += dt * weight * v_ij
+
+            # TLMPM contacts, Alg. 1, line 27-ish;
+            # NOTE: computing PK stress, but using TLMPM 2020, eq 24 (Neo-Hookean)
+            # NOTE: skipping TLMPM contacts, Alg. 1, line 25-26;
+            # don't seem to be needed for Neo-Hookean constitutive model
+            F_inv_trans = F[f, g].inverse().transpose()
+            J = F[f, g].determinant()
+
+            Pk[f, g] = (
+                mu_0 * (F[f, g] - F_inv_trans) + lambda_0 * ti.log(J) * F_inv_trans
+            )
+            # if f == 5 and g == 5:
+            #     print("only in range")
+            #     print(F[f, g])
+            #     print(x_world[f, g])
+            #     print(Pk[f, g])
 
 
 @ti.kernel
@@ -447,6 +526,8 @@ window = ti.ui.Window("Taichi TLMPM", res=res)
 canvas = window.get_canvas()
 radius = 0.002
 
+USE_P2G_GATHER = True
+
 frame = 0
 while window.running and frame < 60000:
     frame += 1
@@ -456,12 +537,15 @@ while window.running and frame < 60000:
         elif window.event.key in [ti.ui.ESCAPE]:
             break
     for s in range(int(2e-3 // dt)):
-        reset_grid()
-        # p2g()
-        p2g_gather()
+        if USE_P2G_GATHER:
+            p2g_gather()
+        else:
+            reset_grid()
+            p2g()
         update_momenta()
         update_particle_and_grid_velocity()
-        g2p()
+        # g2p()
+        g2p_only_cells_in_range()
     update_render_buffer()
 
     canvas.set_background_color((0.067, 0.184, 0.255))
