@@ -3,7 +3,6 @@ import taichi as ti
 ti.init(arch=ti.gpu)  # Try to run on GPU
 
 quality = 3  # Use a larger value for higher-res simulations
-# n_particles = 3000 * quality ** 2
 n_grid = 128 * quality
 dx = 1 / n_grid  # grid spacing
 inv_dx = float(n_grid)
@@ -18,7 +17,7 @@ nu = 0.2  # Poisson's ratio
 mu_0 = E / (2 * (1 + nu))
 lambda_0 = E * nu / ((1 + nu) * (1 - 2 * nu))  # Lame parameters
 
-########
+
 bar_height_grid_cells = n_grid / 4
 bar_width_grid_cells = n_grid / 2
 
@@ -29,7 +28,6 @@ bar_height = bar_height_grid_cells * dx
 bar_width = bar_width_grid_cells * dx
 
 V_0 = p_vol
-########
 
 
 x_config = ti.Vector.field(2, dtype=float, shape=n_particles)  # position
@@ -42,12 +40,10 @@ W_p2g = ti.Matrix.field(3, 3, dtype=float, shape=n_particles)
 W_grad_x_p2g = ti.Matrix.field(3, 3, dtype=float, shape=n_particles)
 W_grad_y_p2g = ti.Matrix.field(3, 3, dtype=float, shape=n_particles)
 
-grid_v = ti.Vector.field(
-    2, dtype=float, shape=(n_grid, n_grid)
-)  # grid node momentum/velocity
-grid_v_next_tmp = ti.Vector.field(
-    2, dtype=float, shape=(n_grid, n_grid)
-)  # grid node momentum/velocity
+# grid node momentum/velocity
+grid_v = ti.Vector.field(2, dtype=float, shape=(n_grid, n_grid))
+grid_v_next_tmp = ti.Vector.field(2, dtype=float, shape=(n_grid, n_grid))
+
 grid_m = ti.field(dtype=float, shape=(n_grid, n_grid))  # grid node mass
 grid_mv = ti.Vector.field(2, dtype=float, shape=(n_grid, n_grid))  # grid forces
 grid_f = ti.Vector.field(2, dtype=float, shape=(n_grid, n_grid))  # grid forces
@@ -90,20 +86,20 @@ def initialization():
 
 @ti.pyfunc
 def hat_kern_1d(x, x_I):
-    # TLMPM contacts, eq 2.1
+    # "TLMPM Contacts", eq 2.1
     abs_dist = ti.abs(x - x_I)
     return (1.0 - abs_dist / dx) if abs_dist < dx else 0.0
 
 
 @ti.pyfunc
 def hat_kern_2d(x, x_I):
-    # TLMPM contacts, eq 2.3
+    # "TLMPM Contacts", eq 2.3
     return hat_kern_1d(x[0], x_I[0]) * hat_kern_1d(x[1], x_I[1])
 
 
 @ti.pyfunc
 def hat_kern_derivative_1d(x, x_I):
-    # TLMPM contacts, eq 2.2
+    # "TLMPM Contacts", eq 2.2
     abs_dist = ti.abs(x - x_I)
     sign = 1.0 if x > x_I else -1.0
     return -sign / dx if abs_dist < dx else 0.0
@@ -111,48 +107,11 @@ def hat_kern_derivative_1d(x, x_I):
 
 @ti.pyfunc
 def hat_kern_derivative_2d(x, x_I):
-    # TLMPM contacts, eq 2.3
+    # "TLMPM Contacts", eq 2.3
     return [
         hat_kern_derivative_1d(x[0], x_I[0]) * hat_kern_1d(x[1], x_I[1]),
         hat_kern_1d(x[0], x_I[0]) * hat_kern_derivative_1d(x[1], x_I[1]),
     ]
-
-
-@ti.pyfunc
-def print_weight_diagnostics(p, i, j):
-    print("p:    ", p)
-    print("x_config:    ", x_config[p])
-    print("W_p2g:    ", W_p2g[p])
-    print("W_grad_x_p2g:    ", W_grad_x_p2g[p])
-    print("W_grad_y_p2g:    ", W_grad_y_p2g[p])
-    base = ti.floor(x_config[p] * inv_dx - 0.5)
-    print("base:    ", base)
-    print("F:    ", F[p])
-    print("Pk:    ", Pk[p])
-
-    offset = ti.Vector([i, j])
-    grid_pos = (base + offset) * dx
-
-    print("grid_pos:    ", grid_pos)
-    print("x_config[p] - grid_pos:    ", x_config[p] - grid_pos)
-    print("hat_kern_2d(x_config[p], grid_pos):    ", hat_kern_2d(x_config[p], grid_pos))
-    print(
-        "hat_kern_derivative_2d(x_config[p], grid_pos):    ",
-        hat_kern_derivative_2d(x_config[p], grid_pos),
-    )
-    weight_grad = ti.Vector([W_grad_x_p2g[p][i, j], W_grad_y_p2g[p][i, j]])
-    print("weight_grad:    ", weight_grad)
-    i0, j0 = base + offset
-    print("i0, j0:    ", i0, j0)
-    v_I = grid_v[i0, j0]
-    print("grid_v[i0, j0]:    ", grid_v[i0, j0])
-    print("grid_v_next_tmp[i0, j0]:    ", grid_v_next_tmp[i0, j0])
-    print("grid_mv[i0, j0]:    ", grid_mv[i0, j0])
-    print("grid_m[i0, j0]:    ", grid_m[i0, j0])
-    print("grid_f[i0, j0]:    ", grid_f[i0, j0])
-    print(
-        "dt * v_I.outer_product(weight_grad):    ", dt * v_I.outer_product(weight_grad)
-    )
 
 
 @ti.kernel
@@ -179,32 +138,22 @@ def compute_nodal_mass():
         ti.atomic_max(max_nodal_mass[None], grid_m[i, j])
 
 
-@ti.kernel
-def init_grid_v():
-    # TLMPM contacts, Alg. 1, line 8-12
-    for p in x_config:
-        base = (x_config[p] * inv_dx - 0.5).cast(int)
-        for i, j in ti.static(ti.ndrange(3, 3)):  # Loop over 3x3 grid node neighborhood
-            offset = ti.Vector([i, j])
-            grid_v[base + offset] += W_p2g[p][i, j] * v[p]
-
-
+# "TLMPM Contacts", Alg. 1, line 2
 initialization()
+# "TLMPM Contacts", Alg. 1, line 4
 compute_p2g_weights_and_grads()
+# "TLMPM Contacts", Alg. 1, line 3
 compute_nodal_mass()
-init_grid_v()
 
-print(max_nodal_mass[None])
-print(v[0])
 
 ################################################################################
-# algorithm steps (TLMPM contacts, Alg. 1)
+# algorithm steps ("TLMPM Contacts", Alg. 1)
 ################################################################################
 
 
 @ti.kernel
 def reset_grid():
-    # TLMPM contacts, Alg. 1, line 7
+    # "TLMPM Contacts", Alg. 1, line 7
     for i, j in grid_m:
         grid_mv[i, j] = [0, 0]
         grid_f[i, j] = [0, 0]
@@ -212,7 +161,7 @@ def reset_grid():
 
 @ti.kernel
 def p2g():
-    # TLMPM contacts, Alg. 1, line 8-12
+    # "TLMPM Contacts", Alg. 1, line 8-12
     for p in x_config:
         base = (x_config[p] * inv_dx - 0.5).cast(int)
         for i, j in ti.static(ti.ndrange(3, 3)):  # Loop over 3x3 grid node neighborhood
@@ -220,7 +169,7 @@ def p2g():
             weighted_mass = p_mass * W_p2g[p][i, j]
             grid_mv[base + offset] += weighted_mass * v[p]
             force_external = weighted_mass * gravity[None]
-            # TLMPM contacts, Alg. 1, line 11 ;
+            # "TLMPM Contacts", Alg. 1, line 11 ;
             weight_grad = ti.Vector([W_grad_x_p2g[p][i, j], W_grad_y_p2g[p][i, j]])
             force_internal = -V_0 * Pk[p] @ weight_grad
             # force_internal = ti.Vector([0.0, 0.0])
@@ -232,7 +181,7 @@ def update_momenta():
     for i, j in grid_m:
         if grid_m[i, j] > 0:
             grid_v[i, j] = grid_mv[i, j] / grid_m[i, j]
-    # TLMPM contacts, Alg. 1, line 14, 17
+    # "TLMPM Contacts", Alg. 1, line 14, 17
     for i, j in grid_m:
         if grid_m[i, j] > 0:
             grid_v_next_tmp[i, j] = grid_v[i, j] + grid_f[i, j] * dt / grid_m[i, j]
@@ -240,7 +189,7 @@ def update_momenta():
 
 @ti.kernel
 def update_particle_and_grid_velocity():
-    # TLMPM contacts, Alg. 1, line 18
+    # "TLMPM Contacts", Alg. 1, line 18
     for p in v:
         v_p = v[p] * alpha
         base = (x_config[p] * inv_dx - 0.5).cast(int)
@@ -256,7 +205,7 @@ def update_particle_and_grid_velocity():
     for i, j in grid_m:
         grid_mv[i, j] = [0, 0]
 
-    # TLMPM contacts, Alg. 1, line 19
+    # "TLMPM Contacts", Alg. 1, line 19
     for p in x_config:
         base = (x_config[p] * inv_dx - 0.5).cast(int)
         for i, j in ti.static(ti.ndrange(3, 3)):  # Loop over 3x3 grid node neighborhood
@@ -280,19 +229,19 @@ def g2p():
             weight = W_p2g[p][i, j]
             v_I = grid_v[base + offset]
 
-            # TLMPM contacts, Alg. 1, line 23-24; see MPM after 25 yrs, eq 2.70
+            # "TLMPM Contacts", Alg. 1, line 23-24; see MPM after 25 yrs, eq 2.70
             weight_grad = ti.Vector([W_grad_x_p2g[p][i, j], W_grad_y_p2g[p][i, j]])
             F[p] += dt * v_I.outer_product(weight_grad)
 
-            # NOTE: skipping TLMPM contacts, Alg. 1, line 25-26;
+            # NOTE: skipping "TLMPM Contacts", Alg. 1, line 25-26;
             #  don't seem to be needed for Neo-Hookean constitutive model
 
-            # TLMPM contacts, Alg. 1, line 28
+            # "TLMPM Contacts", Alg. 1, line 28
             x_world[p] += dt * weight * v_I
 
-        # TLMPM contacts, Alg. 1, line 27-ish;
+        # "TLMPM Contacts", Alg. 1, line 27-ish;
         # NOTE: computing PK stress, but using TLMPM 2020, eq 24 (Neo-Hookean)
-        # NOTE: skipping TLMPM contacts, Alg. 1, line 25-26;
+        # NOTE: skipping "TLMPM Contacts", Alg. 1, line 25-26;
         # don't seem to be needed for Neo-Hookean constitutive model
         F_inv_trans = F[p].inverse().transpose()
         J = F[p].determinant()

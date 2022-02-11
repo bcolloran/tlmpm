@@ -181,20 +181,20 @@ def initialization():
 
 @ti.pyfunc
 def hat_kern_1d(x, x_I):
-    # TLMPM contacts, eq 2.1
+    # "TLMPM Contacts", eq 2.1
     abs_dist = ti.abs(x - x_I)
     return (1.0 - abs_dist / dx) if abs_dist < dx else 0.0
 
 
 @ti.pyfunc
 def hat_kern_2d(x, x_I):
-    # TLMPM contacts, eq 2.3
+    # "TLMPM Contacts", eq 2.3
     return hat_kern_1d(x[0], x_I[0]) * hat_kern_1d(x[1], x_I[1])
 
 
 @ti.pyfunc
 def hat_kern_derivative_1d(x, x_I):
-    # TLMPM contacts, eq 2.2
+    # "TLMPM Contacts", eq 2.2
     abs_dist = ti.abs(x - x_I)
     sign = 1.0 if x > x_I else -1.0
     return -sign / dx if abs_dist < dx else 0.0
@@ -202,7 +202,7 @@ def hat_kern_derivative_1d(x, x_I):
 
 @ti.pyfunc
 def hat_kern_derivative_2d(x, x_I):
-    # TLMPM contacts, eq 2.3
+    # "TLMPM Contacts", eq 2.3
     return [
         hat_kern_derivative_1d(x[0], x_I[0]) * hat_kern_1d(x[1], x_I[1]),
         hat_kern_1d(x[0], x_I[0]) * hat_kern_derivative_1d(x[1], x_I[1]),
@@ -292,7 +292,7 @@ def compute_nodal_mass():
 
 @ti.kernel
 def init_grid_v():
-    # TLMPM contacts, Alg. 1, line 8-12
+    # "TLMPM Contacts", Alg. 1, line 8-12
     for f, g in ti.ndrange(*particle_field_shape):
         base = particle_index_to_grid_base(f, g)
         for i, j in ti.static(ti.ndrange(3, 3)):  # Loop over 3x3 grid node neighborhood
@@ -308,14 +308,14 @@ init_grid_v()
 
 
 ################################################################################
-# algorithm steps (TLMPM contacts, Alg. 1)
+# algorithm steps ("TLMPM Contacts", Alg. 1)
 ################################################################################
 
 
 @ti.kernel
 def p2g():
     # NOTE: in the gather version, we can also do the grid reset within this kernel
-    # TLMPM contacts, Alg. 1, line 7-12
+    # "TLMPM Contacts", Alg. 1, line 7-12
     for i, j in grid_m:
         grid_mv[i, j] = [0, 0]
         grid_f[i, j] = [0, 0]
@@ -329,7 +329,7 @@ def p2g():
             weighted_mass = p_mass * W_stencil[f_off, g_off] * active
             grid_mv[i, j] += weighted_mass * v[f, g]
             force_external = weighted_mass * gravity[None]
-            # TLMPM contacts, Alg. 1, line 11
+            # "TLMPM Contacts", Alg. 1, line 11
             weight_grad = ti.Vector(
                 [
                     W_stencil_grad_x[f_off, g_off],
@@ -339,12 +339,12 @@ def p2g():
             force_internal = -V_0 * Pk[f, g] @ weight_grad * active
             grid_f[i, j] += force_external + force_internal
 
-        # TLMPM contacts, Alg. 1, line 14
+        # "TLMPM Contacts", Alg. 1, line 14
         if grid_m[i, j] > 0:
             grid_v[i, j] = grid_mv[i, j] / grid_m[i, j]
             grid_v_next_tmp[i, j] = grid_v[i, j] + grid_f[i, j] * dt / grid_m[i, j]
 
-        # TLMPM contacts, Alg. 1, line 14; fix Dirichlet nodes
+        # "TLMPM Contacts", Alg. 1, line 14; fix Dirichlet nodes
         # This fixes the left side of the bar in place
         if i <= 1:
             grid_v[i, j] = [0, 0]
@@ -353,7 +353,7 @@ def p2g():
 
 @ti.kernel
 def update_particle_and_grid_velocity():
-    # TLMPM contacts, Alg. 1, line 18
+    # "TLMPM Contacts", Alg. 1, line 18
     for f, g in v:
         if x_active[f, g] != 0.0:
             v_p = v[f, g] * alpha
@@ -374,7 +374,7 @@ def update_particle_and_grid_velocity():
     for i, j in grid_m:
         grid_mv[i, j] = [0, 0]
 
-    # TLMPM contacts, Alg. 1, line 19
+    # "TLMPM Contacts", Alg. 1, line 19
     for f, g in v:
         if x_active[f, g] != 0.0:
             i_base, j_base = particle_index_to_lower_left_cell_index_in_range(f, g)
@@ -384,11 +384,11 @@ def update_particle_and_grid_velocity():
                 f_stencil, g_stencil = W_stencil_index_from_ij_fg(i, j, f, g)
                 grid_mv[i, j] += p_mass * W_stencil[f_stencil, g_stencil] * v[f, g]
 
-    # NOTE: need to add this to prepare grid_v for TLMPM contacts, Alg. 1, line 23
+    # NOTE: need to add this to prepare grid_v for "TLMPM Contacts", Alg. 1, line 23
     for i, j in grid_m:
         if grid_m[i, j] > 0:
             grid_v[i, j] = grid_mv[i, j] / grid_m[i, j]
-        # TLMPM contacts, Alg. 1, line 20 -- Fix dirichlet nodes
+        # "TLMPM Contacts", Alg. 1, line 20 -- Fix dirichlet nodes
         # This fixes the left side of the bar in place
         if i <= 1:
             grid_v[i, j] = [0, 0]
@@ -411,7 +411,7 @@ def g2p():
 
                 v_ij = grid_v[i, j]
                 weight = W_stencil[f_stencil, g_stencil]
-                # TLMPM contacts, Alg. 1, line 23-24; see MPM after 25 yrs, eq 2.70
+                # "TLMPM Contacts", Alg. 1, line 23-24; see MPM after 25 yrs, eq 2.70
                 weight_grad = ti.Vector(
                     [
                         W_stencil_grad_x[f_stencil, g_stencil],
@@ -420,15 +420,15 @@ def g2p():
                 )
                 F[f, g] += dt * v_ij.outer_product(weight_grad)
 
-                # NOTE: skipping TLMPM contacts, Alg. 1, line 25-26;
+                # NOTE: skipping "TLMPM Contacts", Alg. 1, line 25-26;
                 #  don't seem to be needed for Neo-Hookean constitutive model
 
-                # TLMPM contacts, Alg. 1, line 28
+                # "TLMPM Contacts", Alg. 1, line 28
                 x_world[f, g] += dt * weight * v_ij
 
-            # TLMPM contacts, Alg. 1, line 27-ish;
+            # "TLMPM Contacts", Alg. 1, line 27-ish;
             # NOTE: computing PK stress, but using TLMPM 2020, eq 24 (Neo-Hookean)
-            # NOTE: skipping TLMPM contacts, Alg. 1, line 25-26;
+            # NOTE: skipping "TLMPM Contacts", Alg. 1, line 25-26;
             # don't seem to be needed for Neo-Hookean constitutive model
             F_inv_trans = F[f, g].inverse().transpose()
             J = F[f, g].determinant()
