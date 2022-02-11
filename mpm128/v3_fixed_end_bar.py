@@ -6,12 +6,13 @@ Changes in this version:
 
 """
 import numpy as np
+import time
 
 import taichi as ti
 
 ti.init(arch=ti.gpu)  # Try to run on GPU
 
-quality = 1  # Use a larger value for higher-res simulations
+quality = 6  # Use a larger value for higher-res simulations
 n_grid = 128 * quality
 
 # jelly beam width and height as a number of grid cells that they will occupy initially
@@ -153,7 +154,27 @@ radius = 0.003
 initialization()
 gravity[None] = [0, -1]
 
+t0 = time.monotonic_ns()
+t_last_tick = t0
+nano_sec = 1e9
+burn_in_time_ns = 5 * nano_sec
+
+frame = 0
+base_frame = 0
 while window.running:
+    t1 = time.monotonic_ns()
+    if base_frame == 0 and t1 - t0 > burn_in_time_ns:
+        base_frame = frame
+        t0 = t1
+        t_last_tick = t1
+
+    if base_frame > 0 and t1 - t_last_tick > nano_sec:
+        print(
+            f"Avg FPS: {nano_sec * (frame - base_frame) / (t1 - t0)}    ({(t1 - t0)/nano_sec}s)"
+        )
+        t_last_tick = t1
+
+    frame += 1
     if window.get_event(ti.ui.PRESS):
         if window.event.key == "r":
             initialization()

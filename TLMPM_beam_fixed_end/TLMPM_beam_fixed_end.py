@@ -1,4 +1,5 @@
 import taichi as ti
+import time
 
 #
 """
@@ -8,7 +9,7 @@ NOTE: derived from TLMPM_versions/TLMPM_jelly_only_v2.4_just_clean_ups.py
 
 ti.init(arch=ti.gpu, dynamic_index=False)  # Try to run on GPU
 
-quality = 7  # Use a larger value for higher-res simulations
+quality = 2  # Use a larger value for higher-res simulations
 n_grid = 128 * quality
 dx = 1 / n_grid  # grid spacing
 inv_dx = float(n_grid)
@@ -24,24 +25,24 @@ mu_0 = E / (2 * (1 + nu))
 lambda_0 = E * nu / ((1 + nu) * (1 - 2 * nu))  # Lame parameters
 
 ########
-bar_height_grid_cells = int(n_grid / 16)
-bar_width_grid_cells = int(15 / 16 * n_grid)
+beam_height_grid_cells = int(3 / 16 * n_grid)
+beam_width_grid_cells = int(15 / 16 * n_grid)
 
-n_particles = int(particles_per_cell * bar_height_grid_cells * bar_width_grid_cells)
+n_particles = int(particles_per_cell * beam_height_grid_cells * beam_width_grid_cells)
 print("n_particles", n_particles)
 
-bar_height = bar_height_grid_cells * dx
-bar_width = bar_width_grid_cells * dx
+beam_height = beam_height_grid_cells * dx
+beam_width = beam_width_grid_cells * dx
 
 V_0 = p_vol
 ########
 # NOTE: to prevent errors at the boundaries,
 # we add a bit of padding around the grid, as well as an offset to compensate.
 # The Padding is two extra cells along each edge, so +4 cells horiz and vert.
-particle_field_shape = (2 * bar_width_grid_cells, 2 * bar_height_grid_cells)
+particle_field_shape = (2 * beam_width_grid_cells, 2 * beam_height_grid_cells)
 particle_field_shape_padded = (
-    2 * bar_width_grid_cells + 4,
-    2 * bar_height_grid_cells + 4,
+    2 * beam_width_grid_cells + 4,
+    2 * beam_height_grid_cells + 4,
 )
 particle_offset = (-2, -2)
 
@@ -81,7 +82,7 @@ W_grad_y_p2g = ti.Matrix.field(
 # we add a bit of padding around the grid, as well as an offset to compensate.
 # The Padding is two extra cells along each edge, so +4 cells horiz and vert.
 
-grid_field_shape = (bar_width_grid_cells + 4, bar_height_grid_cells + 4)
+grid_field_shape = (beam_width_grid_cells + 4, beam_height_grid_cells + 4)
 grid_offset = (-2, -2)
 grid_v = ti.Vector.field(
     2, dtype=float, shape=grid_field_shape, offset=grid_offset
@@ -169,11 +170,8 @@ def initialization():
     for f, g in x_config:
         ij = ti.Vector([f, g])
         x_config[f, g] = particle_index_to_x_config(ij)
-        bar_center = ti.Vector([0.5, 0.5])
-        bar_lower_left = bar_center - 0.5 * ti.Vector([bar_width, bar_height])
-        x_world[f, g] = x_config[f, g] + bar_lower_left
-        offset_from_center = x_world[f, g] - bar_center
-        # v[f, g] = 10 * ti.Vector([offset_from_center[1], -offset_from_center[0]])
+        beam_lower_left = ti.Vector([0, (1 - beam_height - 2 * dx)])
+        x_world[f, g] = x_config[f, g] + beam_lower_left
         F[f, g] = ti.Matrix([[1, 0], [0, 1]])
 
     # NOTE: ONLY ACTIVATE PARTICLES IN THE CENTRAL RANGE!!!
@@ -447,14 +445,32 @@ def update_render_buffer():
             x_render[f + g * particle_field_shape[0]] = x_world[f, g]
 
 
-res = (512, 512)
+res = (4 * 512, 4 * 512)
 window = ti.ui.Window("Taichi TLMPM", res=res)
 canvas = window.get_canvas()
 radius = 0.002
 
 
+t0 = time.monotonic_ns()
+t_last_tick = t0
+nano_sec = 1e9
+burn_in_time_ns = 5 * nano_sec
+
 frame = 0
+base_frame = 0
 while window.running and frame < 60000:
+    t1 = time.monotonic_ns()
+    if base_frame == 0 and t1 - t0 > burn_in_time_ns:
+        base_frame = frame
+        t0 = t1
+        t_last_tick = t1
+
+    if base_frame > 0 and t1 - t_last_tick > nano_sec:
+        print(
+            f"Avg FPS: {nano_sec * (frame - base_frame) / (t1 - t0)}    ({(t1 - t0)/nano_sec}s)"
+        )
+        t_last_tick = t1
+
     frame += 1
     if window.get_event(ti.ui.PRESS):
         if window.event.key == "r":

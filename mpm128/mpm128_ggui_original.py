@@ -66,14 +66,12 @@ def substep():
             Jp[p] *= sig[d, d] / new_sig
             sig[d, d] = new_sig
             J *= new_sig
-        if (
-            material[p] == 0
-        ):  # Reset deformation gradient to avoid numerical instability
+        if material[p] == 0:
+            # Reset deformation gradient to avoid numerical instability
             F[p] = ti.Matrix.identity(float, 2) * ti.sqrt(J)
         elif material[p] == 2:
-            F[p] = (
-                U @ sig @ V.transpose()
-            )  # Reconstruct elastic deformation gradient after plasticity
+            # Reconstruct elastic deformation gradient after plasticity
+            F[p] = U @ sig @ V.transpose()
         stress = 2 * mu * (F[p] - U @ V.transpose()) @ F[
             p
         ].transpose() + ti.Matrix.identity(float, 2) * la * J * (J - 1)
