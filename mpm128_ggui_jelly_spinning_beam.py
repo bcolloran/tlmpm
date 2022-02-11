@@ -4,7 +4,7 @@ import taichi as ti
 
 ti.init(arch=ti.gpu)  # Try to run on GPU
 
-quality = 1  # Use a larger value for higher-res simulations
+quality = 3  # Use a larger value for higher-res simulations
 # n_particles = 3000 * quality ** 2
 n_grid = 128 * quality
 dx = 1 / n_grid
@@ -19,8 +19,8 @@ mu_0 = E / (2 * (1 + nu))
 lambda_0 = E * nu / ((1 + nu) * (1 - 2 * nu))  # Lame parameters
 
 ########
-bar_height_grid_cells = n_grid / 64
-bar_width_grid_cells = n_grid / 32
+bar_height_grid_cells = n_grid / 4
+bar_width_grid_cells = n_grid / 2
 
 n_particles = int(4 * bar_height_grid_cells * bar_width_grid_cells)
 print("n_particles", n_particles)
@@ -70,14 +70,12 @@ def reset():
             0.25 * dx + 0.5 + i * dx / 2.0 - 0.5 * bar_width,
             0.25 * dx + 0.5 + j * dx / 2.0 - 0.5 * bar_height,
         ]
-        # material[p] = i // group_size  # 0: fluid, 1: jelly, 2: snow
         center_offset = x[p] - ti.Vector([0.5, 0.5])
-        material[p] = 1  # 0: fluid, 1: jelly, 2: snow
-        # v[p] = [0, 0]
         v[p] = 50.0 * ti.Vector([center_offset[1], -center_offset[0]])
         F[p] = ti.Matrix([[1, 0], [0, 1]])
         Jp[p] = 1
         C[p] = ti.Matrix.zero(float, 2, 2)
+        material[p] = 1  # 0: fluid, 1: jelly, 2: snow
 
 
 @ti.kernel
@@ -171,7 +169,7 @@ print(
 )
 
 res = (512, 512)
-window = ti.ui.Window("Taichi MLS-MPM-128", res=res, vsync=True)
+window = ti.ui.Window("Taichi MLS-MPM-128", res=res)
 canvas = window.get_canvas()
 radius = 0.002
 
@@ -185,16 +183,6 @@ while window.running and frame < 600000:
             reset()
         elif window.event.key in [ti.ui.ESCAPE]:
             break
-    # if window.event is not None:
-    #     gravity[None] = [0, 0]  # if had any event
-    # if window.is_pressed(ti.ui.LEFT, "a"):
-    #     gravity[None][0] = -1
-    # if window.is_pressed(ti.ui.RIGHT, "d"):
-    #     gravity[None][0] = 1
-    # if window.is_pressed(ti.ui.UP, "w"):
-    #     gravity[None][1] = 1
-    # if window.is_pressed(ti.ui.DOWN, "s"):
-    #     gravity[None][1] = -1
     mouse = window.get_cursor_pos()
     mouse_circle[0] = ti.Vector([mouse[0], mouse[1]])
     canvas.circles(mouse_circle, color=(0.2, 0.4, 0.6), radius=0.05)
@@ -209,9 +197,5 @@ while window.running and frame < 600000:
         substep()
     render()
     canvas.set_background_color((0.067, 0.184, 0.255))
-    # canvas.circles(water, radius=radius, color=(0, 0.5, 0.5))
     canvas.circles(jelly, radius=radius, color=(0.93, 0.33, 0.23))
-    # canvas.circles(snow, radius=radius, color=(1, 1, 1))
     window.show()
-
-    # print(max_nodal_mass[None])

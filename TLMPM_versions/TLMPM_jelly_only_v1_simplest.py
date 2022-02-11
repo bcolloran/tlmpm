@@ -84,7 +84,7 @@ def initialization():
         ]
         x_world[p] = x_config[p]
         center_offset = x_config[p] - ti.Vector([0.5, 0.5])
-        v[p] = 50 * ti.Vector([center_offset[1], -center_offset[0]])
+        v[p] = 50.0 * ti.Vector([center_offset[1], -center_offset[0]])
         F[p] = ti.Matrix([[1, 0], [0, 1]])
 
 
