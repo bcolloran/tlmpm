@@ -5,7 +5,6 @@ import taichi as ti
 ti.init(arch=ti.gpu)  # Try to run on GPU
 
 quality = 3  # Use a larger value for higher-res simulations
-# n_particles = 3000 * quality ** 2
 n_grid = 128 * quality
 dx = 1 / n_grid
 inv_dx = float(n_grid)
@@ -18,7 +17,7 @@ nu = 0.2  # Poisson's ratio
 mu_0 = E / (2 * (1 + nu))
 lambda_0 = E * nu / ((1 + nu) * (1 - 2 * nu))  # Lame parameters
 
-########
+
 bar_height_grid_cells = n_grid / 4
 bar_width_grid_cells = n_grid / 2
 
@@ -27,7 +26,6 @@ print("n_particles", n_particles)
 
 bar_height = bar_height_grid_cells * dx
 bar_width = bar_width_grid_cells * dx
-########
 
 
 x = ti.Vector.field(2, dtype=float, shape=n_particles)  # position
@@ -43,16 +41,12 @@ grid_v = ti.Vector.field(
 grid_m = ti.field(dtype=float, shape=(n_grid, n_grid))  # grid node mass
 
 gravity = ti.Vector.field(2, dtype=float, shape=())
-# gravity[None] = [0, -1]
 gravity[None] = [0, 0]
 attractor_strength = ti.field(dtype=float, shape=())
 attractor_pos = ti.Vector.field(2, dtype=float, shape=())
 
-# group_size = n_particles // 3
 group_size = n_particles
-# water = ti.Vector.field(2, dtype=float, shape=group_size)  # position
 jelly = ti.Vector.field(2, dtype=float, shape=group_size)  # position
-# snow = ti.Vector.field(2, dtype=float, shape=group_size)  # position
 mouse_circle = ti.Vector.field(2, dtype=float, shape=(1,))
 
 
@@ -61,11 +55,13 @@ max_nodal_mass = ti.field(dtype=float, shape=())
 
 @ti.kernel
 def reset():
+    # NOTE: this initialization _assumes_ a hardcoded value of 4 particles per cell (2 along any single dimension)
+    # the "2.0"s in expression below are to account for 2 points per cell
+    # horizontally*vertically = 4 points per cell
     for p in range(n_particles):
-        # NOTE: "2.0"s in expression below are to account for 2 points per cell
-        # horizontally*vertically = 4 points per cell
         i = int(p % (bar_width_grid_cells * 2.0))
         j = int(p / (bar_width_grid_cells * 2.0))
+        # NOTE: "0.25 * dx" is to offset points to interior of cells (to quadrature points)
         x[p] = [
             0.25 * dx + 0.5 + i * dx / 2.0 - 0.5 * bar_width,
             0.25 * dx + 0.5 + j * dx / 2.0 - 0.5 * bar_height,
@@ -159,9 +155,6 @@ def substep():
 def render():
     for i in range(group_size):
         jelly[i] = x[i]
-        # water[i] = x[i]
-        # jelly[i] = x[i + group_size]
-        # snow[i] = x[i + 2 * group_size]
 
 
 print(
