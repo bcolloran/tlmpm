@@ -32,7 +32,7 @@ x = ti.Vector.field(2, dtype=float, shape=n_particles)  # position
 v = ti.Vector.field(2, dtype=float, shape=n_particles)  # velocity
 C = ti.Matrix.field(2, 2, dtype=float, shape=n_particles)  # affine velocity field
 F = ti.Matrix.field(2, 2, dtype=float, shape=n_particles)  # deformation gradient
-material = ti.field(dtype=int, shape=n_particles)  # material id
+
 Jp = ti.field(dtype=float, shape=n_particles)  # plastic deformation
 
 grid_v = ti.Vector.field(
@@ -46,7 +46,6 @@ attractor_strength = ti.field(dtype=float, shape=())
 attractor_pos = ti.Vector.field(2, dtype=float, shape=())
 
 group_size = n_particles
-jelly = ti.Vector.field(2, dtype=float, shape=group_size)  # position
 mouse_circle = ti.Vector.field(2, dtype=float, shape=(1,))
 
 
@@ -71,7 +70,6 @@ def reset():
         F[p] = ti.Matrix([[1, 0], [0, 1]])
         Jp[p] = 1
         C[p] = ti.Matrix.zero(float, 2, 2)
-        material[p] = 1  # 0: fluid, 1: jelly, 2: snow
 
 
 @ti.kernel
@@ -90,8 +88,7 @@ def substep():
         F[p] = (ti.Matrix.identity(float, 2) + dt * C[p]) @ F[
             p
         ]  # deformation gradient update
-
-        h = 1
+        h = 0.3
         mu, la = mu_0 * h, lambda_0 * h
         U, sig, V = ti.svd(F[p])
         J = 1.0
@@ -151,16 +148,6 @@ def substep():
         x[p] += dt * v[p]  # advection
 
 
-@ti.kernel
-def render():
-    for i in range(group_size):
-        jelly[i] = x[i]
-
-
-print(
-    "[Hint] Use WSAD/arrow keys to control gravity. Use left/right mouse bottons to attract/repel. Press R to reset."
-)
-
 res = (512, 512)
 window = ti.ui.Window("Taichi MLS-MPM-128", res=res)
 canvas = window.get_canvas()
@@ -176,19 +163,9 @@ while window.running and frame < 600000:
             reset()
         elif window.event.key in [ti.ui.ESCAPE]:
             break
-    mouse = window.get_cursor_pos()
-    mouse_circle[0] = ti.Vector([mouse[0], mouse[1]])
-    canvas.circles(mouse_circle, color=(0.2, 0.4, 0.6), radius=0.05)
-    attractor_pos[None] = [mouse[0], mouse[1]]
-    attractor_strength[None] = 0
-    if window.is_pressed(ti.ui.LMB):
-        attractor_strength[None] = 1
-    if window.is_pressed(ti.ui.RMB):
-        attractor_strength[None] = -1
 
     for s in range(int(2e-3 // dt)):
         substep()
-    render()
     canvas.set_background_color((0.067, 0.184, 0.255))
-    canvas.circles(jelly, radius=radius, color=(0.93, 0.33, 0.23))
+    canvas.circles(x, radius=radius, color=(0.93, 0.33, 0.23))
     window.show()

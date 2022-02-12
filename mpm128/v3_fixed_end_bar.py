@@ -55,7 +55,7 @@ gravity[None] = [0, -1]
 
 
 @ti.kernel
-def initialization():
+def init_particle_data():
     # NOTE: this initialization assume a hardcoded value of 4 particles per grid cell (2 along any single dimension)
     for p in range(n_particles):
         # NOTE: "2.0"s in expression below are to account for 2 points per cell
@@ -151,7 +151,7 @@ window = ti.ui.Window("Taichi MLS-MPM-128", res=res)
 canvas = window.get_canvas()
 radius = 0.003
 
-initialization()
+init_particle_data()
 gravity[None] = [0, -1]
 
 t0 = time.monotonic_ns()
@@ -177,7 +177,7 @@ while window.running:
     frame += 1
     if window.get_event(ti.ui.PRESS):
         if window.event.key == "r":
-            initialization()
+            init_particle_data()
         elif window.event.key in [ti.ui.ESCAPE]:
             break
     for s in range(int(2e-3 // dt)):

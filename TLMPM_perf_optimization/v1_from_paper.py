@@ -61,7 +61,7 @@ mouse_circle = ti.Vector.field(2, dtype=float, shape=(1,))
 
 
 @ti.kernel
-def reset():
+def init_particle_data():
     # NOTE: this initialization _assumes_ a hardcoded value of 4 particles per cell (2 along any single dimension)
     # the "2.0"s in expression below are to account for 2 points per cell
     # horizontally*vertically = 4 points per cell
