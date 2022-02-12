@@ -38,15 +38,15 @@ For this file, I'd recommend reviewing Algorithm 2 in "TLMPM Contacts"; the file
 
 ### `v2_grid_of_particles_in_config_space.py`
 
-(~2x speedup; ~30 -> ~60 fps)
-
 Comparing this version to the previous one, it will initially look like a lot of changes have been made. However, in actuality there is really only one change: since the positions of particles are fixed in configuration space in TLMPM, and moreover since they are fixed on a cartesian lattice with a fixed relationship to the MPM background grid (4 particles per grid cell), it makes sense to store the particles in a 2d field and access them by their index in the lattice. The actual position in configuration space can be easily calculated with the index in the particle field and the spacing of the background grid.
 
 This also substantially simplifies some of the details regarding which grid nodes each particle maps to, allowing us to easily use a background grid that is sized specifically for the initial particle distribution in configuration space. This dramatically reduces the amount of memory needed for the grid and the amount of computation required for kernels that operate on the entire grid.
 
 Note: starting with this file we always use the notation _(i,j)_ to refer to indices of the MPM background grid, and _(f,g)_ to refer to indices of particles in configuration space.
 
-### `v1_from_paper.py`
+### `v3_particle_grid_to_cell_grid_accessors.py`
+
+This version makes one very small change. The `mpm128.py`, there is the concept of the grid `base` that corresponds to each particle; this is the bottom-left-most grid node of the 3x3 range of nodes that need to be iterated over for each particle during p2g and g2p. For TLMPM, this is not really needed because, since particles have a fixed position in configuration space and can be store on a fixed grid, the `base` need not be calculated from the configuration space position, it can calculated using the indices od the particle in the field of particles.
 
 ### `v1_from_paper.py`
 

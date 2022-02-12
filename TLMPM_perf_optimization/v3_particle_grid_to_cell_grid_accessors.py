@@ -10,7 +10,6 @@ Doing this buys us maybe a couple extra FPS with ~74k particles on quality level
 ti.init(arch=ti.gpu)  # Try to run on GPU
 
 quality = 3  # Use a larger value for higher-res simulations
-# n_particles = 3000 * quality ** 2
 n_grid = 128 * quality
 dx = 1 / n_grid  # grid spacing
 inv_dx = float(n_grid)
@@ -25,7 +24,7 @@ nu = 0.2  # Poisson's ratio
 mu_0 = E / (2 * (1 + nu))
 lambda_0 = E * nu / ((1 + nu) * (1 - 2 * nu))  # Lame parameters
 
-########
+
 bar_height_grid_cells = int(n_grid / 4)
 bar_width_grid_cells = int(n_grid / 2)
 
@@ -36,7 +35,7 @@ bar_height = bar_height_grid_cells * dx
 bar_width = bar_width_grid_cells * dx
 
 V_0 = p_vol
-########
+
 particle_field_shape = (2 * bar_width_grid_cells, 2 * bar_height_grid_cells)
 
 
@@ -89,11 +88,6 @@ x_render = ti.Vector.field(
     2, dtype=float, shape=particle_field_shape[0] * particle_field_shape[1]
 )  # position
 mouse_circle = ti.Vector.field(2, dtype=float, shape=(1,))
-
-
-################################################################################
-# init
-################################################################################
 
 
 @ti.pyfunc
@@ -150,46 +144,6 @@ def hat_kern_derivative_2d(x, x_I):
     ]
 
 
-@ti.pyfunc
-def print_weight_diagnostics(f, g, i, j):
-    print("f,g:    ", f, g)
-    print("x_config:    ", x_config[f, g])
-    print("W_p2g:    ", W_p2g[f, g])
-    print("W_grad_x_p2g:    ", W_grad_x_p2g[f, g])
-    print("W_grad_y_p2g:    ", W_grad_y_p2g[f, g])
-    base = ti.floor(x_config[f, g] * inv_dx - 0.5)
-    print("base:    ", base)
-    print("F:    ", F[f, g])
-    print("Pk:    ", Pk[f, g])
-
-    offset = ti.Vector([i, j])
-    grid_pos = (base + offset) * dx
-
-    print("grid_pos:    ", grid_pos)
-    print("x_config[f,g] - grid_pos:    ", x_config[f, g] - grid_pos)
-    print(
-        "hat_kern_2d(x_config[f,g], grid_pos):    ",
-        hat_kern_2d(x_config[f, g], grid_pos),
-    )
-    print(
-        "hat_kern_derivative_2d(x_config[f,g], grid_pos):    ",
-        hat_kern_derivative_2d(x_config[f, g], grid_pos),
-    )
-    weight_grad = ti.Vector([W_grad_x_p2g[f, g][i, j], W_grad_y_p2g[f, g][i, j]])
-    print("weight_grad:    ", weight_grad)
-    i0, j0 = base + offset
-    print("i0, j0:    ", i0, j0)
-    v_I = grid_v[i0, j0]
-    print("grid_v[i0, j0]:    ", grid_v[i0, j0])
-    print("grid_v_next_tmp[i0, j0]:    ", grid_v_next_tmp[i0, j0])
-    print("grid_mv[i0, j0]:    ", grid_mv[i0, j0])
-    print("grid_m[i0, j0]:    ", grid_m[i0, j0])
-    print("grid_f[i0, j0]:    ", grid_f[i0, j0])
-    print(
-        "dt * v_I.outer_product(weight_grad):    ", dt * v_I.outer_product(weight_grad)
-    )
-
-
 @ti.kernel
 def compute_p2g_weights_and_grads():
     for f, g in x_config:
@@ -214,26 +168,12 @@ def compute_nodal_mass():
         ti.atomic_max(max_nodal_mass[None], grid_m[i, j])
 
 
-@ti.kernel
-def init_grid_v():
-    # "TLMPM Contacts", Alg. 1, line 8-12
-    for f, g in x_config:
-        base = particle_index_to_grid_base(f, g)
-        for i, j in ti.static(ti.ndrange(3, 3)):  # Loop over 3x3 grid node neighborhood
-            offset = ti.Vector([i, j])
-            grid_v[base + offset] += W_p2g[f, g][i, j] * v[f, g]
-
-
+# "TLMPM Contacts", Alg. 1, line 2
 init_particle_data()
+# "TLMPM Contacts", Alg. 1, line 4
 compute_p2g_weights_and_grads()
+# "TLMPM Contacts", Alg. 1, line 3
 compute_nodal_mass()
-init_grid_v()
-
-print(max_nodal_mass[None])
-
-################################################################################
-# algorithm steps ("TLMPM Contacts", Alg. 1)
-################################################################################
 
 
 @ti.kernel
