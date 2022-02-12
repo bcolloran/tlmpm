@@ -48,7 +48,9 @@ Note: starting with this file we always use the notation _(i,j)_ to refer to ind
 
 This version makes one very small change. The `mpm128.py`, there is the concept of the grid `base` that corresponds to each particle; this is the bottom-left-most grid node of the 3x3 range of nodes that need to be iterated over for each particle during p2g and g2p. For TLMPM, this is not really needed because, since particles have a fixed position in configuration space and can be store on a fixed grid, the `base` need not be calculated from the configuration space position, it can calculated using the indices od the particle in the field of particles.
 
-### `v1_from_paper.py`
+### `v4_gather.py`
+
+This file has the most important changes of any so far, and massively improves the performance of the implementation. Since TLMPM operates in configuration space and each particle is permanently assigned to a background grid cell, rather than doing scattered atomic add operation from particles to grid cells, each grid cell can gather the information it needs from it's neighboring particles.
 
 ### `v1_from_paper.py`
 
