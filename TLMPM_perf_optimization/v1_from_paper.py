@@ -7,9 +7,9 @@ n_grid = 128 * quality
 dx = 1 / n_grid  # grid spacing
 inv_dx = float(n_grid)
 dt = 1e-4 / quality
-particles_per_cell_along_one_dimension = 2
-particles_per_cell = particles_per_cell_along_one_dimension ** 2
-p_vol = (dx / particles_per_cell_along_one_dimension) ** 2
+particles_per_cell_1d = 2
+particles_per_cell = particles_per_cell_1d ** 2
+p_vol = (dx / particles_per_cell_1d) ** 2
 p_rho = 1
 p_mass = p_vol * p_rho
 E = 5e3  # Young's modulus
@@ -60,17 +60,12 @@ alpha = 0.99
 mouse_circle = ti.Vector.field(2, dtype=float, shape=(1,))
 
 
-################################################################################
-# init
-################################################################################
-
-
 @ti.kernel
-def initialization():
-    # FIXME: this initialization _assumes_ a hardcoded value of 4 particles per cell (2 along any single dimension)
+def reset():
+    # NOTE: this initialization _assumes_ a hardcoded value of 4 particles per cell (2 along any single dimension)
+    # the "2.0"s in expression below are to account for 2 points per cell
+    # horizontally*vertically = 4 points per cell
     for p in range(n_particles):
-        # NOTE: "2.0"s in expression below are to account for 2 points per cell
-        # horizontally*vertically = 4 points per cell
         i = int(p % (bar_width_grid_cells * 2.0))
         j = int(p / (bar_width_grid_cells * 2.0))
         # NOTE: "0.25 * dx" is to offset points to interior of cells (to quadrature points)
@@ -139,16 +134,11 @@ def compute_nodal_mass():
 
 
 # "TLMPM Contacts", Alg. 1, line 2
-initialization()
+init_particle_data()
 # "TLMPM Contacts", Alg. 1, line 4
 compute_p2g_weights_and_grads()
 # "TLMPM Contacts", Alg. 1, line 3
 compute_nodal_mass()
-
-
-################################################################################
-# algorithm steps ("TLMPM Contacts", Alg. 1)
-################################################################################
 
 
 @ti.kernel
@@ -259,7 +249,7 @@ while window.running and frame < 60000:
     frame += 1
     if window.get_event(ti.ui.PRESS):
         if window.event.key == "r":
-            initialization()
+            reset()
         elif window.event.key in [ti.ui.ESCAPE]:
             break
     for s in range(int(2e-3 // dt)):

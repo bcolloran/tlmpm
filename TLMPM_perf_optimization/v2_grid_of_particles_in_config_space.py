@@ -124,7 +124,7 @@ def particle_index_to_x_config(ij):
 
 
 @ti.kernel
-def initialization():
+def init_particle_data():
     # FIXME: this initialization _assumes_ a hardcoded value of 4 particles per cell (2 along any single dimension)
     for i, j in x_config:
         ij = ti.Vector([i, j])
@@ -241,7 +241,7 @@ def init_grid_v():
             grid_v[base + offset] += W_p2g[f, g][i, j] * v[f, g]
 
 
-initialization()
+init_particle_data()
 compute_p2g_weights_and_grads()
 compute_nodal_mass()
 init_grid_v()
@@ -370,7 +370,7 @@ while window.running and frame < 60000:
     frame += 1
     if window.get_event(ti.ui.PRESS):
         if window.event.key == "r":
-            initialization()
+            init_particle_data()
         elif window.event.key in [ti.ui.ESCAPE]:
             break
     for s in range(int(2e-3 // dt)):
