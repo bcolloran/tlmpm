@@ -36,7 +36,15 @@ This initial version departs from the particle-oriented MPM implementation from 
 
 For this file, I'd recommend reviewing Algorithm 2 in "TLMPM Contacts"; the file is heavily annotated with comments indicating exactly which line of code maps to which line in the algorithm from the paper.
 
-### `v1_from_paper.py`
+### `v2_grid_of_particles_in_config_space.py`
+
+(~2x speedup; ~30 -> ~60 fps)
+
+Comparing this version to the previous one, it will initially look like a lot of changes have been made. However, in actuality there is really only one change: since the positions of particles are fixed in configuration space in TLMPM, and moreover since they are fixed on a cartesian lattice with a fixed relationship to the MPM background grid (4 particles per grid cell), it makes sense to store the particles in a 2d field and access them by their index in the lattice. The actual position in configuration space can be easily calculated with the index in the particle field and the spacing of the background grid.
+
+This also substantially simplifies some of the details regarding which grid nodes each particle maps to, allowing us to easily use a background grid that is sized specifically for the initial particle distribution in configuration space. This dramatically reduces the amount of memory needed for the grid and the amount of computation required for kernels that operate on the entire grid.
+
+Note: starting with this file we always use the notation _(i,j)_ to refer to indices of the MPM background grid, and _(f,g)_ to refer to indices of particles in configuration space.
 
 ### `v1_from_paper.py`
 

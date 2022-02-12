@@ -18,8 +18,8 @@ mu_0 = E / (2 * (1 + nu))
 lambda_0 = E * nu / ((1 + nu) * (1 - 2 * nu))  # Lame parameters
 
 
-bar_height_grid_cells = n_grid / 4
-bar_width_grid_cells = n_grid / 2
+bar_height_grid_cells = int(n_grid / 4)
+bar_width_grid_cells = int(n_grid / 2)
 
 n_particles = int(particles_per_cell * bar_height_grid_cells * bar_width_grid_cells)
 print("n_particles", n_particles)
@@ -249,7 +249,7 @@ while window.running and frame < 60000:
     frame += 1
     if window.get_event(ti.ui.PRESS):
         if window.event.key == "r":
-            reset()
+            init_particle_data()
         elif window.event.key in [ti.ui.ESCAPE]:
             break
     for s in range(int(2e-3 // dt)):
