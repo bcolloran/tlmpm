@@ -55,11 +55,13 @@ V_0 = p_vol
 # we add a bit of padding around the grid, as well as an offset to compensate.
 # The Padding is two extra cells along each edge, so +4 cells horiz and vert.
 particle_field_shape = (2 * bar_width_grid_cells, 2 * bar_height_grid_cells)
-particle_field_shape_padded = (
-    2 * bar_width_grid_cells + 4,
-    2 * bar_height_grid_cells + 4,
-)
-particle_offset = (-2, -2)
+# particle_field_shape_padded = (
+#     2 * bar_width_grid_cells + 4,
+#     2 * bar_height_grid_cells + 4,
+# )
+particle_field_shape_padded = particle_field_shape
+# particle_offset = (-2, -2)
+particle_offset = (0, 0)
 
 
 x_config = ti.Vector.field(2, dtype=float)  # position
@@ -82,8 +84,8 @@ def place_particle_field(field):
         ti.root.dense(
             ti.ij,
             (
-                particle_field_shape_padded[0] // leaf_block_size + 1,
-                particle_field_shape_padded[1] // leaf_block_size + 1,
+                particle_field_shape_padded[0] // leaf_block_size,
+                particle_field_shape_padded[1] // leaf_block_size,
             ),
         )
         .dense(ti.ij, (leaf_block_size, leaf_block_size))

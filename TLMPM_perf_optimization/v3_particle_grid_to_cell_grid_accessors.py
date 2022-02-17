@@ -87,12 +87,12 @@ alpha = 0.99
 x_render = ti.Vector.field(
     2, dtype=float, shape=particle_field_shape[0] * particle_field_shape[1]
 )  # position
-mouse_circle = ti.Vector.field(2, dtype=float, shape=(1,))
 
 
 @ti.pyfunc
-def particle_index_to_x_config(ij):
-    return 0.25 * dx + 0.5 * dx * ij.cast(float)
+def particle_index_to_x_config(fg):
+    # map particle index to position in configuration space
+    return 0.25 * dx + 0.5 * dx * fg.cast(float)
 
 
 @ti.pyfunc
@@ -103,15 +103,15 @@ def particle_index_to_grid_base(f, g):
 @ti.kernel
 def init_particle_data():
     # FIXME: this initialization _assumes_ a hardcoded value of 4 particles per cell (2 along any single dimension)
-    for i, j in x_config:
-        ij = ti.Vector([i, j])
-        x_config[i, j] = particle_index_to_x_config(ij)
+    for f, g in x_config:
+        fg = ti.Vector([f, g])
+        x_config[f, g] = particle_index_to_x_config(fg)
         bar_center = ti.Vector([0.5, 0.5])
         bar_lower_left = bar_center - 0.5 * ti.Vector([bar_width, bar_height])
-        x_world[i, j] = x_config[i, j] + bar_lower_left
-        offset_from_center = x_world[i, j] - bar_center
-        v[i, j] = 50 * ti.Vector([offset_from_center[1], -offset_from_center[0]])
-        F[i, j] = ti.Matrix([[1, 0], [0, 1]])
+        x_world[f, g] = x_config[f, g] + bar_lower_left
+        offset_from_center = x_world[f, g] - bar_center
+        v[f, g] = 50 * ti.Vector([offset_from_center[1], -offset_from_center[0]])
+        F[f, g] = ti.Matrix([[1, 0], [0, 1]])
 
 
 @ti.pyfunc
