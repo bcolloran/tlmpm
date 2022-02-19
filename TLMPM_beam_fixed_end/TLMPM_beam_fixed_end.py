@@ -1,7 +1,10 @@
 import taichi as ti
-import time
+import sys, os
 
-#
+sys.path.append(os.path.abspath(__file__ + "/../.."))
+
+from utils.fps_counter import FpsCounter
+
 """
 NOTE: derived from TLMPM_versions/TLMPM_jelly_only_v2.4_just_clean_ups.py
 
@@ -448,28 +451,29 @@ def update_render_buffer():
 res = (4 * 512, 4 * 512)
 window = ti.ui.Window("Taichi TLMPM", res=res)
 canvas = window.get_canvas()
-radius = 0.002
+radius = 0.75 / (4 * 512)
 
 
-t0 = time.monotonic_ns()
-t_last_tick = t0
-nano_sec = 1e9
-burn_in_time_ns = 5 * nano_sec
+# t_last_tick = t0
+# nano_sec = 1e9
+# burn_in_time_ns = 5 * nano_sec
 
 frame = 0
-base_frame = 0
+# base_frame = 0
+fps_counter = FpsCounter()
 while window.running and frame < 60000:
-    t1 = time.monotonic_ns()
-    if base_frame == 0 and t1 - t0 > burn_in_time_ns:
-        base_frame = frame
-        t0 = t1
-        t_last_tick = t1
+    # t1 = time.monotonic_ns()
+    # if base_frame == 0 and t1 - t0 > burn_in_time_ns:
+    #     base_frame = frame
+    #     t0 = t1
+    #     t_last_tick = t1
 
-    if base_frame > 0 and t1 - t_last_tick > nano_sec:
-        print(
-            f"Avg FPS: {nano_sec * (frame - base_frame) / (t1 - t0)}    ({(t1 - t0)/nano_sec}s)"
-        )
-        t_last_tick = t1
+    # if base_frame > 0 and t1 - t_last_tick > nano_sec:
+    #     print(
+    #         f"Avg FPS: {nano_sec * (frame - base_frame) / (t1 - t0)}    ({(t1 - t0)/nano_sec}s)"
+    #     )
+    #     t_last_tick = t1
+    fps_counter.count_fps(frame)
 
     frame += 1
     if window.get_event(ti.ui.PRESS):
