@@ -16,8 +16,9 @@ quality = (
 )  # Use a larger value for higher-res simulations
 
 """
-NOTE: rolling update_momenta into p2g: ~205-208FPS -> 224FPS
+NOTE: In this variant, the only change from the previous is that we find the grid base using the indices of the particles rather than converting from configuration space coordinates.
 
+Doing this buys us maybe a couple extra FPS with ~74k particles on quality level 3 (~62 -> ~65 fps). Not a big deal, but interesting to note that this small tweak can make a detectable difference.
 """
 
 ti.init(arch=ti.gpu)  # Try to run on GPU
@@ -53,17 +54,15 @@ particle_field_shape = (2 * bar_width_grid_cells, 2 * bar_height_grid_cells)
 
 x_config = ti.Vector.field(2, dtype=float, shape=particle_field_shape)  # position
 x_world = ti.Vector.field(2, dtype=float, shape=particle_field_shape)  # position
-# is the particle at this position active?
-x_active = ti.field(dtype=float, shape=particle_field_shape)
 v = ti.Vector.field(2, dtype=float, shape=particle_field_shape)  # velocity
 F = ti.Matrix.field(
     2, 2, dtype=float, shape=particle_field_shape
 )  # deformation gradient
 Pk = ti.Matrix.field(2, 2, dtype=float, shape=particle_field_shape)  # pk stresses
 
-W_p2g = ti.Matrix.field(3, 3, dtype=float, shape=particle_field_shape)
-W_grad_x_p2g = ti.Matrix.field(3, 3, dtype=float, shape=particle_field_shape)
-W_grad_y_p2g = ti.Matrix.field(3, 3, dtype=float, shape=particle_field_shape)
+W_p2g = ti.Matrix.field(2, 2, dtype=float, shape=particle_field_shape)
+W_grad_x_p2g = ti.Matrix.field(2, 2, dtype=float, shape=particle_field_shape)
+W_grad_y_p2g = ti.Matrix.field(2, 2, dtype=float, shape=particle_field_shape)
 
 
 # NOTE: to prevent errors at the boundaries,
@@ -88,10 +87,6 @@ grid_f = ti.Vector.field(
     2, dtype=float, shape=grid_field_shape, offset=grid_offset
 )  # grid forces
 
-W_stencil = ti.field(dtype=float, shape=(4, 4))
-W_stencil_grad_x = ti.field(dtype=float, shape=(4, 4))
-W_stencil_grad_y = ti.field(dtype=float, shape=(4, 4))
-
 gravity = ti.Vector.field(2, dtype=float, shape=())
 gravity[None] = [0, 0]
 attractor_strength = ti.field(dtype=float, shape=())
@@ -114,29 +109,8 @@ def particle_index_to_x_config(fg):
 
 
 @ti.pyfunc
-def grid_index_to_center_pos(i, j):
-    # map grid index to cell center position in configuration space
-    return dx * (ti.Vector([i, j]).cast(float) + 0.5)
-
-
-@ti.pyfunc
 def particle_index_to_grid_base(f, g):
     return ti.Vector([f // 2, g // 2]) - 1
-
-
-@ti.pyfunc
-def particle_index_to_lower_left_cell_index_in_range(f, g):
-    return (f - 1) // 2, (g - 1) // 2
-
-
-@ti.pyfunc
-def grid_index_to_particle_base(f, g):
-    return 2 * ti.Vector([f, g]) - 1
-
-
-@ti.pyfunc
-def W_stencil_index_from_ij_fg(i, j, f, g):
-    return (f - (2 * i - 1), g - (2 * j - 1))
 
 
 @ti.kernel
@@ -151,10 +125,6 @@ def init_particle_data():
         offset_from_center = x_world[f, g] - bar_center
         v[f, g] = 50 * ti.Vector([offset_from_center[1], -offset_from_center[0]])
         F[f, g] = ti.Matrix([[1, 0], [0, 1]])
-
-    # NOTE: ONLY ACTIVATE PARTICLES IN THE CENTRAL RANGE!!!
-    for f, g in ti.ndrange(*particle_field_shape):
-        x_active[f, g] = 1.0
 
 
 @ti.pyfunc
@@ -191,8 +161,9 @@ def hat_kern_derivative_2d(x, x_I):
 def compute_p2g_weights_and_grads():
     for f, g in x_config:
         base = particle_index_to_grid_base(f, g)
-        for i, j in ti.static(ti.ndrange(3, 3)):  # Loop over 3x3 grid node neighborhood
-            grid_pos = grid_index_to_center_pos(base[0] + i, base[1] + j)
+        for i, j in ti.static(ti.ndrange(2, 2)):  # Loop over 2x2 grid node neighborhood
+            offset = ti.Vector([i, j])
+            grid_pos = (base + offset).cast(float) * dx
             W_p2g[f, g][i, j] = hat_kern_2d(x_config[f, g], grid_pos)
             W_grad = hat_kern_derivative_2d(x_config[f, g], grid_pos)
             W_grad_x_p2g[f, g][i, j] = W_grad[0]
@@ -200,26 +171,10 @@ def compute_p2g_weights_and_grads():
 
 
 @ti.kernel
-def init_cell_stencil_weights_and_grads():
-    # we can choose an arbitrary grid node (we chose (1,1) here)
-    # and use that (along with initialized x_config values) to find the
-    # weights and grads for any cell center to the particle locations in
-    # it's neighborhood
-    grid_pos = grid_index_to_center_pos(1, 1)
-    particle_base = grid_index_to_particle_base(1, 1)
-    for f_off, g_off in ti.static(ti.ndrange(4, 4)):
-        x_pos = x_config[f_off + particle_base[0], g_off + particle_base[1]]
-        W_stencil[f_off, g_off] = hat_kern_2d(x_pos, grid_pos)
-        W_grad = hat_kern_derivative_2d(x_pos, grid_pos)
-        W_stencil_grad_x[f_off, g_off] = W_grad[0]
-        W_stencil_grad_y[f_off, g_off] = W_grad[1]
-
-
-@ti.kernel
 def compute_nodal_mass():
     for f, g in x_config:
         base = particle_index_to_grid_base(f, g)
-        for i, j in ti.static(ti.ndrange(3, 3)):  # Loop over 3x3 grid node neighborhood
+        for i, j in ti.static(ti.ndrange(2, 2)):  # Loop over 2x2 grid node neighborhood
             offset = ti.Vector([i, j])
             grid_m[base + offset] += W_p2g[f, g][i, j] * p_mass
     for i, j in grid_m:
@@ -230,41 +185,45 @@ def compute_nodal_mass():
 init_particle_data()
 # "TLMPM Contacts", Alg. 1, line 4
 compute_p2g_weights_and_grads()
-init_cell_stencil_weights_and_grads()
 # "TLMPM Contacts", Alg. 1, line 3
 compute_nodal_mass()
 
 
 @ti.kernel
-def p2g():
-    # NOTE: in the gather version, we can also do the grid reset within this kernel
-    # "TLMPM Contacts", Alg. 1, line 7-12
+def reset_grid():
+    # "TLMPM Contacts", Alg. 1, line 7
     for i, j in grid_m:
         grid_mv[i, j] = [0, 0]
         grid_f[i, j] = [0, 0]
-        particle_base = grid_index_to_particle_base(i, j)
-        for f_off, g_off in ti.static(ti.ndrange(4, 4)):
 
-            f = particle_base[0] + f_off
-            g = particle_base[1] + g_off
 
-            active = x_active[f, g]
-            weighted_mass = p_mass * W_stencil[f_off, g_off] * active
-            grid_mv[i, j] += weighted_mass * v[f, g]
+@ti.kernel
+def p2g():
+    # "TLMPM Contacts", Alg. 1, line 8-12
+    for f, g in x_config:
+        base = particle_index_to_grid_base(f, g)
+        for i, j in ti.static(ti.ndrange(2, 2)):  # Loop over 2x2 grid node neighborhood
+            offset = ti.Vector([i, j])
+            weighted_mass = p_mass * W_p2g[f, g][i, j]
+            grid_mv[base + offset] += weighted_mass * v[f, g]
             force_external = weighted_mass * gravity[None]
             # "TLMPM Contacts", Alg. 1, line 11 ;
             weight_grad = ti.Vector(
-                [
-                    W_stencil_grad_x[f_off, g_off],
-                    W_stencil_grad_y[f_off, g_off],
-                ]
+                [W_grad_x_p2g[f, g][i, j], W_grad_y_p2g[f, g][i, j]]
             )
-            force_internal = -V_0 * Pk[f, g] @ weight_grad * active
-            grid_f[i, j] += force_external + force_internal
+            force_internal = -V_0 * Pk[f, g] @ weight_grad
+            # force_internal = ti.Vector([0.0, 0.0])
+            grid_f[base + offset] += force_external + force_internal
 
+
+@ti.kernel
+def update_momenta():
+    for i, j in grid_m:
         if grid_m[i, j] > 0:
             grid_v[i, j] = grid_mv[i, j] / grid_m[i, j]
-            # "TLMPM Contacts", Alg. 1, line 14, 17
+    # "TLMPM Contacts", Alg. 1, line 14, 17
+    for i, j in grid_m:
+        if grid_m[i, j] > 0:
             grid_v_next_tmp[i, j] = grid_v[i, j] + grid_f[i, j] * dt / grid_m[i, j]
 
 
@@ -272,34 +231,26 @@ def p2g():
 def update_particle_and_grid_velocity():
     # "TLMPM Contacts", Alg. 1, line 18
     for f, g in v:
-        if x_active[f, g] != 0.0:
-            v_p = v[f, g] * alpha
-            i_base, j_base = particle_index_to_lower_left_cell_index_in_range(f, g)
-            for i_off, j_off in ti.static(ti.ndrange(2, 2)):
-                i = i_base + i_off
-                j = j_base + j_off
-                v_next = grid_v_next_tmp[i, j]
-                v_this = grid_v[i, j]
-                f_stencil, g_stencil = W_stencil_index_from_ij_fg(i, j, f, g)
-                weight = W_stencil[f_stencil, g_stencil]
-                v_p += (
-                    alpha * weight * (v_next - v_this) + (1 - alpha) * weight * v_next
-                )
-            v[f, g] = v_p
+        v_p = v[f, g] * alpha
+        base = particle_index_to_grid_base(f, g)
+        for i, j in ti.static(ti.ndrange(2, 2)):  # Loop over 2x2 grid node neighborhood
+            offset = ti.Vector([i, j])
+            v_next = grid_v_next_tmp[base + offset]
+            v_this = grid_v[base + offset]
+            weight = W_p2g[f, g][i, j]
+            v_p += alpha * weight * (v_next - v_this) + (1 - alpha) * weight * v_next
+        v[f, g] = v_p
 
     # NOTE: need to reset grid_mv again before Alg.1 line 19
     for i, j in grid_m:
         grid_mv[i, j] = [0, 0]
 
     # "TLMPM Contacts", Alg. 1, line 19
-    for f, g in v:
-        if x_active[f, g] != 0.0:
-            i_base, j_base = particle_index_to_lower_left_cell_index_in_range(f, g)
-            for i_off, j_off in ti.static(ti.ndrange(2, 2)):
-                i = i_base + i_off
-                j = j_base + j_off
-                f_stencil, g_stencil = W_stencil_index_from_ij_fg(i, j, f, g)
-                grid_mv[i, j] += p_mass * W_stencil[f_stencil, g_stencil] * v[f, g]
+    for f, g in x_config:
+        base = particle_index_to_grid_base(f, g)
+        for i, j in ti.static(ti.ndrange(2, 2)):  # Loop over 2x2 grid node neighborhood
+            offset = ti.Vector([i, j])
+            grid_mv[base + offset] += p_mass * W_p2g[f, g][i, j] * v[f, g]
 
     for i, j in grid_m:
         if grid_m[i, j] > 0:
@@ -309,52 +260,40 @@ def update_particle_and_grid_velocity():
 @ti.kernel
 def g2p():
     for f, g in x_config:
-        if x_active[f, g] != 0.0:
-            i_base, j_base = particle_index_to_lower_left_cell_index_in_range(f, g)
+        base = particle_index_to_grid_base(f, g)
 
-            # we don't actually need to loop over a 3x3 neighborhood;
-            # for a kernel with radius dx (i.e with radius equal to grid spacing)
-            # only _4_ grid nodes (2x2) will ever be in range
-            for i_off, j_off in ti.static(ti.ndrange(2, 2)):
-                i = i_base + i_off
-                j = j_base + j_off
+        v_I = ti.Vector([0.0, 0.0])
+        for i, j in ti.static(ti.ndrange(2, 2)):  # Loop over 2x2 grid node neighborhood
+            offset = ti.Vector([i, j])
+            weight = W_p2g[f, g][i, j]
+            v_I = grid_v[base + offset]
 
-                f_stencil, g_stencil = W_stencil_index_from_ij_fg(i, j, f, g)
-
-                v_ij = grid_v[i, j]
-                weight = W_stencil[f_stencil, g_stencil]
-                # "TLMPM Contacts", Alg. 1, line 23-24; see MPM after 25 yrs, eq 2.70
-                weight_grad = ti.Vector(
-                    [
-                        W_stencil_grad_x[f_stencil, g_stencil],
-                        W_stencil_grad_y[f_stencil, g_stencil],
-                    ]
-                )
-                F[f, g] += dt * v_ij.outer_product(weight_grad)
-
-                # NOTE: skipping "TLMPM Contacts", Alg. 1, line 25-26;
-                #  don't seem to be needed for Neo-Hookean constitutive model
-
-                # "TLMPM Contacts", Alg. 1, line 28
-                x_world[f, g] += dt * weight * v_ij
-
-            # "TLMPM Contacts", Alg. 1, line 27-ish;
-            # NOTE: computing PK stress, but using TLMPM 2020, eq 24 (Neo-Hookean)
-            # NOTE: skipping "TLMPM Contacts", Alg. 1, line 25-26;
-            # don't seem to be needed for Neo-Hookean constitutive model
-            F_inv_trans = F[f, g].inverse().transpose()
-            J = F[f, g].determinant()
-
-            Pk[f, g] = (
-                mu_0 * (F[f, g] - F_inv_trans) + lambda_0 * ti.log(J) * F_inv_trans
+            # "TLMPM Contacts", Alg. 1, line 23-24; see MPM after 25 yrs, eq 2.70
+            weight_grad = ti.Vector(
+                [W_grad_x_p2g[f, g][i, j], W_grad_y_p2g[f, g][i, j]]
             )
+            F[f, g] += dt * v_I.outer_product(weight_grad)
+
+            # NOTE: skipping "TLMPM Contacts", Alg. 1, line 25-26;
+            #  don't seem to be needed for Neo-Hookean constitutive model
+
+            # "TLMPM Contacts", Alg. 1, line 28
+            x_world[f, g] += dt * weight * v_I
+
+        # "TLMPM Contacts", Alg. 1, line 27-ish;
+        # NOTE: computing PK stress, but using TLMPM 2020, eq 24 (Neo-Hookean)
+        # NOTE: skipping "TLMPM Contacts", Alg. 1, line 25-26;
+        # don't seem to be needed for Neo-Hookean constitutive model
+        F_inv_trans = F[f, g].inverse().transpose()
+        J = F[f, g].determinant()
+
+        Pk[f, g] = mu_0 * (F[f, g] - F_inv_trans) + lambda_0 * ti.log(J) * F_inv_trans
 
 
 @ti.kernel
 def update_render_buffer():
     for f, g in x_world:
-        if x_active[f, g] != 0.0:
-            x_render[f + g * particle_field_shape[0]] = x_world[f, g]
+        x_render[f + g * particle_field_shape[0]] = x_world[f, g]
 
 
 res = (512, 512)
@@ -374,7 +313,9 @@ while window.running and duration < max_duration:
         elif window.event.key in [ti.ui.ESCAPE]:
             break
     for s in range(int(2e-3 // dt)):
+        reset_grid()
         p2g()
+        update_momenta()
         update_particle_and_grid_velocity()
         g2p()
     update_render_buffer()

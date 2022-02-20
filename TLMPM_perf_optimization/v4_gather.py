@@ -1,6 +1,20 @@
 import taichi as ti
 
-#
+import argparse, sys, os
+
+sys.path.append(os.path.abspath(__file__ + "/../.."))
+
+from utils.fps_counter import FpsCounter
+
+parser = argparse.ArgumentParser()
+parser.add_argument("-q", "--quality", help="simulation quality", type=int)
+parser.add_argument("-t", "--time", help="simulation duration (seconds)", type=int)
+args = parser.parse_args()
+max_duration = args.time if args.time else 60 * 5
+quality = (
+    args.quality if args.quality else 3
+)  # Use a larger value for higher-res simulations
+
 """
 NOTE: In this variant, we attempt to use a "gather" strategy rather than "scatter". The hope is that this will improve performance by avoiding atomic operations during p2g and g2p, which can be slow. This should also open the door for future optimizations using block local storage.
 
@@ -20,9 +34,8 @@ NOTE: applying the "in range only" treatment to `update_particle_and_grid_veloci
 
 """
 
-ti.init(arch=ti.gpu, dynamic_index=False)  # Try to run on GPU
+ti.init(arch=ti.gpu)  # Try to run on GPU
 
-quality = 3  # Use a larger value for higher-res simulations
 n_grid = 128 * quality
 dx = 1 / n_grid  # grid spacing
 inv_dx = float(n_grid)
@@ -237,14 +250,6 @@ compute_nodal_mass()
 
 
 @ti.kernel
-def reset_grid():
-    # "TLMPM Contacts", Alg. 1, line 7
-    for i, j in grid_m:
-        grid_mv[i, j] = [0, 0]
-        grid_f[i, j] = [0, 0]
-
-
-@ti.kernel
 def p2g():
     # NOTE: in the gather version, we can also do the grid reset within this kernel
     # "TLMPM Contacts", Alg. 1, line 7-12
@@ -378,7 +383,10 @@ canvas = window.get_canvas()
 radius = 0.002
 
 frame = 0
-while window.running and frame < 60000:
+duration = 0
+fps_counter = FpsCounter()
+while window.running and duration < max_duration:
+    fps, duration = fps_counter.count_fps(frame)
     frame += 1
     if window.get_event(ti.ui.PRESS):
         if window.event.key == "r":

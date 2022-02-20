@@ -1,6 +1,20 @@
 import taichi as ti
 
-#
+import argparse, sys, os
+
+sys.path.append(os.path.abspath(__file__ + "/../.."))
+
+from utils.fps_counter import FpsCounter
+
+parser = argparse.ArgumentParser()
+parser.add_argument("-q", "--quality", help="simulation quality", type=int)
+parser.add_argument("-t", "--time", help="simulation duration (seconds)", type=int)
+args = parser.parse_args()
+max_duration = args.time if args.time else 60 * 5
+quality = (
+    args.quality if args.quality else 3
+)  # Use a larger value for higher-res simulations
+
 """
 NOTE: in this variant, we use a grid of particles in configutation space.
 Since we are assuming 4 fixed particles per cell (2 by 2), we can use a grid of these particles to store them. this will have some memorey overhead in the case of non-rectangular objects, but it will simplify access to the particles corresponding to cells and vice versa.
@@ -31,7 +45,6 @@ NOTE: In this variant we also dramatically reduce the number of grid cells we ne
 
 ti.init(arch=ti.gpu)  # Try to run on GPU
 
-quality = 3  # Use a larger value for higher-res simulations
 n_grid = 128 * quality
 dx = 1 / n_grid  # grid spacing
 inv_dx = float(n_grid)
@@ -109,7 +122,6 @@ alpha = 0.99
 x_render = ti.Vector.field(
     2, dtype=float, shape=particle_field_shape[0] * particle_field_shape[1]
 )  # position
-mouse_circle = ti.Vector.field(2, dtype=float, shape=(1,))
 
 
 @ti.pyfunc
@@ -306,7 +318,10 @@ canvas = window.get_canvas()
 radius = 0.002
 
 frame = 0
-while window.running and frame < 60000:
+duration = 0
+fps_counter = FpsCounter()
+while window.running and duration < max_duration:
+    fps, duration = fps_counter.count_fps(frame)
     frame += 1
     if window.get_event(ti.ui.PRESS):
         if window.event.key == "r":

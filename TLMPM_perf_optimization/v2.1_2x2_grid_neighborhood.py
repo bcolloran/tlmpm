@@ -1,6 +1,20 @@
 import taichi as ti
 
-#
+import argparse, sys, os
+
+sys.path.append(os.path.abspath(__file__ + "/../.."))
+
+from utils.fps_counter import FpsCounter
+
+parser = argparse.ArgumentParser()
+parser.add_argument("-q", "--quality", help="simulation quality", type=int)
+parser.add_argument("-t", "--time", help="simulation duration (seconds)", type=int)
+args = parser.parse_args()
+max_duration = args.time if args.time else 60 * 5
+quality = (
+    args.quality if args.quality else 3
+)  # Use a larger value for higher-res simulations
+
 """
 NOTE: in this variant, we use a grid of particles in configutation space.
 Since we are assuming 4 fixed particles per cell (2 by 2), we can use a grid of these particles to store them. this will have some memorey overhead in the case of non-rectangular objects, but it will simplify access to the particles corresponding to cells and vice versa.
@@ -31,7 +45,6 @@ NOTE: In this variant we also dramatically reduce the number of grid cells we ne
 
 ti.init(arch=ti.gpu)  # Try to run on GPU
 
-quality = 3  # Use a larger value for higher-res simulations
 n_grid = 128 * quality
 dx = 1 / n_grid  # grid spacing
 inv_dx = float(n_grid)
@@ -109,26 +122,25 @@ alpha = 0.99
 x_render = ti.Vector.field(
     2, dtype=float, shape=particle_field_shape[0] * particle_field_shape[1]
 )  # position
-mouse_circle = ti.Vector.field(2, dtype=float, shape=(1,))
 
 
 @ti.pyfunc
-def particle_index_to_x_config(ij):
-    return 0.25 * dx + 0.5 * dx * ij.cast(float)
+def particle_index_to_x_config(fg):
+    return 0.25 * dx + 0.5 * dx * fg.cast(float)
 
 
 @ti.kernel
 def init_particle_data():
     # FIXME: this initialization _assumes_ a hardcoded value of 4 particles per cell (2 along any single dimension)
-    for i, j in x_config:
-        ij = ti.Vector([i, j])
-        x_config[i, j] = particle_index_to_x_config(ij)
+    for f, g in x_config:
+        fg = ti.Vector([f, g])
+        x_config[f, g] = particle_index_to_x_config(fg)
         bar_center = ti.Vector([0.5, 0.5])
         bar_lower_left = bar_center - 0.5 * ti.Vector([bar_width, bar_height])
-        x_world[i, j] = x_config[i, j] + bar_lower_left
-        offset_from_center = x_world[i, j] - bar_center
-        v[i, j] = 50 * ti.Vector([offset_from_center[1], -offset_from_center[0]])
-        F[i, j] = ti.Matrix([[1, 0], [0, 1]])
+        x_world[f, g] = x_config[f, g] + bar_lower_left
+        offset_from_center = x_world[f, g] - bar_center
+        v[f, g] = 50 * ti.Vector([offset_from_center[1], -offset_from_center[0]])
+        F[f, g] = ti.Matrix([[1, 0], [0, 1]])
 
 
 @ti.pyfunc
@@ -311,7 +323,10 @@ canvas = window.get_canvas()
 radius = 0.002
 
 frame = 0
-while window.running and frame < 60000:
+duration = 0
+fps_counter = FpsCounter()
+while window.running and duration < max_duration:
+    fps, duration = fps_counter.count_fps(frame)
     frame += 1
     if window.get_event(ti.ui.PRESS):
         if window.event.key == "r":
