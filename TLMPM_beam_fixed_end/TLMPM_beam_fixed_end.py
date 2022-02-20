@@ -454,25 +454,9 @@ canvas = window.get_canvas()
 radius = 0.75 / (4 * 512)
 
 
-# t_last_tick = t0
-# nano_sec = 1e9
-# burn_in_time_ns = 5 * nano_sec
-
 frame = 0
-# base_frame = 0
 fps_counter = FpsCounter()
 while window.running and frame < 60000:
-    # t1 = time.monotonic_ns()
-    # if base_frame == 0 and t1 - t0 > burn_in_time_ns:
-    #     base_frame = frame
-    #     t0 = t1
-    #     t_last_tick = t1
-
-    # if base_frame > 0 and t1 - t_last_tick > nano_sec:
-    #     print(
-    #         f"Avg FPS: {nano_sec * (frame - base_frame) / (t1 - t0)}    ({(t1 - t0)/nano_sec}s)"
-    #     )
-    #     t_last_tick = t1
     fps_counter.count_fps(frame)
 
     frame += 1
