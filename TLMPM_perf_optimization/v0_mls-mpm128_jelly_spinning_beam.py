@@ -1,10 +1,22 @@
-import numpy as np
-
 import taichi as ti
+
+import argparse, sys, os
+
+sys.path.append(os.path.abspath(__file__ + "/../.."))
+
+from utils.fps_counter import FpsCounter
+
+parser = argparse.ArgumentParser()
+parser.add_argument("-q", "--quality", help="simulation quality", type=int)
+parser.add_argument("-t", "--time", help="simulation duration (seconds)", type=int)
+args = parser.parse_args()
+max_duration = args.time if args.time else 60 * 5
+quality = (
+    args.quality if args.quality else 3
+)  # Use a larger value for higher-res simulations
 
 ti.init(arch=ti.gpu)  # Try to run on GPU
 
-quality = 3  # Use a larger value for higher-res simulations
 n_grid = 128 * quality
 dx = 1 / n_grid
 inv_dx = float(n_grid)
@@ -156,7 +168,10 @@ radius = 0.002
 reset()
 
 frame = 0
-while window.running and frame < 600000:
+duration = 0
+fps_counter = FpsCounter()
+while window.running and duration < max_duration:
+    fps, duration = fps_counter.count_fps(frame)
     frame += 1
     if window.get_event(ti.ui.PRESS):
         if window.event.key == "r":

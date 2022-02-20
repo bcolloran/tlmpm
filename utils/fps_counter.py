@@ -9,6 +9,8 @@ class FpsCounter:
         self.base_frame = -1
         self.burn_in_time_ns = burn_in_secs * nanosecs_per_sec
         self.print_period_nanosecs = int(print_period_secs * nanosecs_per_sec)
+        self.avg_fps = -1.0
+        self.elapsed_secs = -1.0
 
     def count_fps(self, frame: int):
         t1 = time.monotonic_ns()
@@ -23,3 +25,5 @@ class FpsCounter:
             self.elapsed_secs = (t1 - self.t0) / nanosecs_per_sec
 
             print(f"Avg FPS: {self.avg_fps}     (after {self.elapsed_secs}s)")
+
+        return (self.avg_fps, self.elapsed_secs)
