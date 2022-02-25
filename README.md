@@ -12,6 +12,12 @@ The objective is to present a simple, step-by-step series of improvements to the
 
 Ideally, in the first step you should be able to see how the algorithm from "TLMPM Contacts" maps to the code, and even though the final version we end up with will look quite different, since we've gone step-by-step making small changes along the way, you'll hopefully be able to understand and reconstruct why the final code looks the way it does.
 
+## To run the demos
+
+You'll need to `pip install taichi`, then simply run any of the scripts, e.g. `python TLMPM_beam_fixed_end/TLMPM_beam_fixed_end.py`.
+
+This code has been tested on Taichi `0.8.11` with CUDA. You may need install CUDA if you want to use GPU, I have not tried the non-CUDA backends.
+
 ## How to read this repo
 
 To follow along with the implementation improvements, it's recommended that you clone/download this repo to your local machine and then use you favorite text editor to compare the different TLMPM implementations in the folder `TLMPM_perf_optimization`. The files are all named starting with a version number, e.g. `v{n}_*.py`; in each case, the changes between `v{n}_*.py` and `v{n+1}_*.py` is meant to be one discrete set of improvements that should be easy to follow and understand.
@@ -24,15 +30,19 @@ Below we describe the changes made between each version, starting with the file 
 
 ### `v0_mpm128_jelly_spinning_beam.py`
 
-In This first file, we make a numer of changes to `mpm128.py` to give create a baseline MLS-MPM scenario that will allow us to track the progress of our TLMPM implementation:
+In This first file, we make a number of changes to `mpm128.py` to give create a baseline MLS-MPM scenario that will allow us to track the progress of our TLMPM implementation:
 
 - because TLMPM is best suited for solids that don't undergo plastic deformation, the water and snow materials are not really appropriate so we use only the "jelly" material;
-- because the handling of conatact is a bit more involved in TLMPM than MLS-MPM, we want a scenario in which the object simulated won't have to bounce off of the bounds of teh simulation area, so we initialize the particles as a spinning beam;
+- because the handling of contact is not automatic in TLMPM, we want a scenario in which the object simulated won't have to bounce off of the bounds of the simulation area, so we initialize the particles as a spinning beam;
 - because we want to be able to be able to use exactly the same number of particles in our MLS-MPM and TLMPM simulations, we initialize the particles on a Cartesian lattice rather than randomly.
+
+To satisfy these requirements, we'll simulate a spinning beam. This is a very uninteresting scenario for a continuum simulation, but the main point here is to focus on the changes to the implementation as we refine it, not the scenario itself.
 
 ### `v1_from_paper.py`
 
-This initial version departs from the particle-oriented MPM implementation from `v0_mpm128_jelly_spinning_beam.py`, in which the p2g and g2p phases "iterates" over particles; in p2g particles scatter information to the grid (using atomic adds), and in g2p they gather from the grid.However, there are a lot of code changes between `v0_mpm128_jelly_spinning_beam.py` and `v1_from_paper.py` (so a direct diff between them may not be super illuminating at this point).
+This initial implementation of TLMPM is based on the particle-oriented MLS-MPM implementation from `v0_mpm128_jelly_spinning_beam.py`, in which the p2g and g2p phases "iterates" over particles; in p2g particles scatter information to the grid (using atomic adds), and in g2p they gather from the grid.
+
+However, there are a lot of code changes between `v0_mpm128_jelly_spinning_beam.py` and `v1_from_paper.py` (so a direct diff between them may not be super illuminating at this point).
 
 For this file, I'd recommend reviewing Algorithm 2 in "TLMPM Contacts"; the file is heavily annotated with comments indicating exactly which line of code maps to which line in the algorithm from the paper.
 
@@ -56,6 +66,42 @@ This file has the most important changes of any so far, and massively improves t
 
 ### `v1_from_paper.py`
 
-## To run the demos
+## Performance
 
-You'll need to `pip install taichi`; this code has been tested on `0.8.11` with CUDA. You may need install CUDA if you want to use GPU, I have not tried the non-CUDA backends.
+With 294912 particles, after 5 seconds of warm up and then 20 seconds of FPS measurement time,
+
+```
+v0_mls-mpm128_jelly_spinning_beam.py
+Avg FPS: 15.55262
+
+
+v1_from_paper.py
+Avg FPS: 4.54324
+
+v1.1_2x2_grid_neighborhood.py
+Avg FPS: 8.16787
+
+v2_grid_of_particles_in_config_space.py
+Avg FPS: 7.127766
+
+v2.1_2x2_grid_neighborhood.py
+Avg FPS: 18.94525
+
+v3_particle_grid_to_cell_grid_accessors.py
+Avg FPS: 7.378533
+
+<!-- v3.1_2x2_particle_grid_to_cell_grid_accessors.py
+Avg FPS: 20.59186 -->
+
+v4.1_more_gather_DEAD_END.py
+Avg FPS: 5.40506
+
+v4_gather.py
+Avg FPS: 31.74193
+
+v5_update_momentum_in_p2g.py
+Avg FPS: 32.957
+
+v7_memory_placement.py
+Avg FPS: 32.4825
+```
