@@ -236,14 +236,6 @@ compute_nodal_mass()
 
 
 @ti.kernel
-def reset_grid():
-    # "TLMPM Contacts", Alg. 1, line 7
-    for i, j in grid_m:
-        grid_mv[i, j] = [0, 0]
-        grid_f[i, j] = [0, 0]
-
-
-@ti.kernel
 def p2g():
     # NOTE: in the gather version, we can also do the grid reset within this kernel
     # "TLMPM Contacts", Alg. 1, line 7-12
