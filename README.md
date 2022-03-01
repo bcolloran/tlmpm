@@ -78,19 +78,21 @@ Note: starting with this file we always use the notation _(i,j)_ to refer to ind
 
 _Avg FPS: 20.84_
 
-This version makes one very small change. The `mpm128.py`, there is the concept of the grid `base` that corresponds to each particle; this is the bottom-left-most grid node of the 3x3 range of nodes that need to be iterated over for each particle during p2g and g2p. For TLMPM, this is not really needed because, since particles have a fixed position in configuration space and can be store on a fixed grid, the `base` need not be calculated from the configuration space position, it can calculated using the indices od the particle in the field of particles.
+This version makes one very small change. In `mpm128.py`, there is the concept of the grid `base` that corresponds to each particle; this is the bottom-left-most grid node of the 3x3 range of nodes that need to be iterated over for each particle during p2g and g2p. For TLMPM, this is not really needed because, since particles have a fixed position in configuration space and can be store on a fixed grid, the `base` need not be calculated from the configuration space position, it can calculated using the indices od the particle in the field of particles. It's interesting to see that even a seemingly tiny change like this (replacing a couple casts and floating point multiplications with an integer division) can result in several percentage points of performance improvement.
 
 ### `v4_gather.py`
 
 _Avg FPS: 32.31_
 
-This file has the most important changes of any so far, and massively improves the performance of the implementation. Since TLMPM operates in configuration space and each particle is permanently assigned to a background grid cell, rather than doing scattered atomic add operation from particles to grid cells, each grid cell can gather the information it needs from it's neighboring particles.
+This file has the most important changes of any so far, and massively improves the performance of the implementation. Since TLMPM operates in configuration space and each particle is permanently assigned to a background grid cell, rather than doing scattered atomic add operation from particles to grid cells, each grid cell can gather the information it needs from it's neighboring particles. In this file, we make that change in p2g and g2p.
+
+Additionally, since doing p2g as a gather requires gathering from a 4x4 neighborhood of surrounding particles, we take this opportunity to notice that for each grid node, the surrounding particles will always have the same offset positions. Therefore we only need to calculate a single 4x4 stencil for weights and weight gradients, and that this stencil can be applied at every grid node. This dramatically reduces memory use, and should also perhaps improve memory locality.
 
 ### `v4.1_more_gather_DEAD_END.py`
 
 _Avg FPS: 5.63_
 
-This variant attempted to complete the process of replacing scattered atomic adds with gathers by updating the calculation of `grid_mv` to use a gather. This unexpectedly _destroys_ the performance of the implentation. I don't understand why this should be the case at this poiont, it remains a question to be investigated.
+This variant attempted to complete the process of replacing scattered atomic adds with gathers by updating the calculation of `grid_mv` to use a gather. This unexpectedly _destroys_ the performance of the implentation. I don't understand why this should be the case at this; it remains a question to be investigated.
 
 ### `v5_update_momentum_in_p2g.py`
 
