@@ -123,11 +123,16 @@ def hat_kern_derivative_2d(x, x_I):
     ]
 
 
+@ti.pyfunc
+def get_base_for_particle(p):
+    return (x_config[p] * inv_dx).cast(int)
+
+
 @ti.kernel
 def compute_p2g_weights_and_grads():
     for p in x_config:
-        base = (x_config[p] * inv_dx - 0.5).cast(int)
-        for i, j in ti.static(ti.ndrange(3, 3)):  # Loop over 3x3 grid node neighborhood
+        base = get_base_for_particle(p)
+        for i, j in ti.static(ti.ndrange(2, 2)):  # Loop over 2x2 grid node neighborhood
             offset = ti.Vector([i, j])
             grid_pos = (base + offset).cast(float) * dx
             W_p2g[p][i, j] = hat_kern_2d(x_config[p], grid_pos)
@@ -139,8 +144,8 @@ def compute_p2g_weights_and_grads():
 @ti.kernel
 def compute_nodal_mass():
     for p in x_config:
-        base = (x_config[p] * inv_dx - 0.5).cast(int)
-        for i, j in ti.static(ti.ndrange(3, 3)):  # Loop over 3x3 grid node neighborhood
+        base = get_base_for_particle(p)
+        for i, j in ti.static(ti.ndrange(2, 2)):  # Loop over 2x2 grid node neighborhood
             offset = ti.Vector([i, j])
             grid_m[base + offset] += W_p2g[p][i, j] * p_mass
     for i, j in grid_m:
@@ -167,8 +172,8 @@ def reset_grid():
 def p2g():
     # "TLMPM Contacts", Alg. 1, line 8-12
     for p in x_config:
-        base = (x_config[p] * inv_dx - 0.5).cast(int)
-        for i, j in ti.static(ti.ndrange(3, 3)):  # Loop over 3x3 grid node neighborhood
+        base = get_base_for_particle(p)
+        for i, j in ti.static(ti.ndrange(2, 2)):  # Loop over 2x2 grid node neighborhood
             offset = ti.Vector([i, j])
             weighted_mass = p_mass * W_p2g[p][i, j]
             grid_mv[base + offset] += weighted_mass * v[p]
@@ -196,8 +201,8 @@ def update_particle_and_grid_velocity():
     # "TLMPM Contacts", Alg. 1, line 18
     for p in v:
         v_p = v[p] * alpha
-        base = (x_config[p] * inv_dx - 0.5).cast(int)
-        for i, j in ti.static(ti.ndrange(3, 3)):  # Loop over 3x3 grid node neighborhood
+        base = get_base_for_particle(p)
+        for i, j in ti.static(ti.ndrange(2, 2)):  # Loop over 2x2 grid node neighborhood
             offset = ti.Vector([i, j])
             v_next = grid_v_next_tmp[base + offset]
             v_this = grid_v[base + offset]
@@ -211,8 +216,8 @@ def update_particle_and_grid_velocity():
 
     # "TLMPM Contacts", Alg. 1, line 19
     for p in x_config:
-        base = (x_config[p] * inv_dx - 0.5).cast(int)
-        for i, j in ti.static(ti.ndrange(3, 3)):  # Loop over 3x3 grid node neighborhood
+        base = get_base_for_particle(p)
+        for i, j in ti.static(ti.ndrange(2, 2)):  # Loop over 2x2 grid node neighborhood
             offset = ti.Vector([i, j])
             grid_mv[base + offset] += p_mass * W_p2g[p][i, j] * v[p]
 
@@ -227,8 +232,9 @@ def g2p():
     for p in x_config:
         base = (x_config[p] * inv_dx - 0.5).cast(int)
 
-        v_I = ti.Vector([0.0, 0.0])
-        for i, j in ti.static(ti.ndrange(3, 3)):  # Loop over 3x3 grid node neighborhood
+        # v_I = ti.Vector([0.0, 0.0])
+        base = get_base_for_particle(p)
+        for i, j in ti.static(ti.ndrange(2, 2)):  # Loop over 2x2 grid node neighborhood
             offset = ti.Vector([i, j])
             weight = W_p2g[p][i, j]
             v_I = grid_v[base + offset]

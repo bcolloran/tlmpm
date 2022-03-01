@@ -31,11 +31,11 @@ To follow along with the implementation improvements, it's recommended that you 
 
 These files follow the strategy I took when implementing TLMPM: start with the working code in `mpm128.py`, and adapt it to Algorithm 2 in "TLMPM Contacts", then make incremental improvements from there. This is a little awkward at first, because these algorithms are different enough that shoehorning TLMPM into the `mpm128.py` framework resulted in some code that is not what you would want if you we're approaching TLMPM from scratch, but I as a relatively new user of Taichi, it was helpful to have this scaffolding.
 
-Below we describe the changes made between each version, starting with the file `v0_mpm128_jelly_spinning_beam.py`. The FPS numbers given are from running the simulation with 294912 particles, allowing 5 seconds of warm up and then taking 20 seconds of FPS measurements.
+Below we describe the changes made between each version, starting with the file `v0_mpm128_jelly_spinning_beam.py`. The FPS numbers given are from running the simulation with 294912 particles, allowing 5 seconds of warm up and then taking 20 seconds of FPS measurements. (Note that these FPS numbers should not be taken to suggest anything about the relative merits of these MLS-MPM vs TLMPM, as the MLS-MPM implementation is not necessarily fully optimized, and in any case the comparison is apples-to-oranges in quite a number of ways.)
 
 ### `v0_mpm128_jelly_spinning_beam.py`
 
-_Avg FPS: 15.55262_
+_Avg FPS: 15.59_
 
 In This first file, we make a number of changes to `mpm128.py` to give create a baseline MLS-MPM scenario that will allow us to track the progress of our TLMPM implementation:
 
@@ -47,17 +47,26 @@ To satisfy these requirements, we'll simulate a spinning beam. This is a very un
 
 ### `v1_from_paper.py`
 
-_Avg FPS: 4.54324_
+_Avg FPS: 8.29_
 
-This initial implementation of TLMPM is based on the particle-oriented MLS-MPM implementation from `v0_mpm128_jelly_spinning_beam.py`, in which the p2g and g2p phases "iterates" over particles; in p2g particles scatter information to the grid (using atomic adds), and in g2p they gather from the grid.
+This initial implementation of TLMPM is based on the particle-oriented MLS-MPM implementation from `v0_mpm128_jelly_spinning_beam.py`, in which the p2g and g2p phases "iterates" over particles; in p2g particles scatter information to the grid (using atomic adds), and in g2p they gather from the grid. This is not optimal for TLMPM (as we will see below), but it follows from the template
 
 However, there are a lot of code changes between `v0_mpm128_jelly_spinning_beam.py` and `v1_from_paper.py` (so a direct diff between them may not be super illuminating at this point).
 
-For this file, I'd recommend reviewing Algorithm 2 in "TLMPM Contacts"; the file is heavily annotated with comments indicating exactly which line of code maps to which line in the algorithm from the paper.
+For this file, I'd recommend reviewing Algorithm 2 in "TLMPM Contacts"; the file is heavily annotated with comments indicating exactly which line of code maps to which line in the algorithm from the paper. This is likely to be the most helpful way of understanding how the TLMPM algorithm works, but a few of the main conceptual changes from `v0_mpm128_jelly_spinning_beam.py` reflected in this code are:
+
+- TLMPM calculates it's deformation particle/grid transfer weights using the positions of particles and grid cells in _configuration space_, therefore fields must be added to capture this data alongside the world positions of particles
+- Since weights and weight gradients are calculated WRT unchanging configuration space positions, they are calculated and stored _once_ before the simulation begins.
+
+  - In this code, all of the relevant initialization kernels and functions are coded with clarity rather than performance in mind since they will be run only once. Furthermore, they are not optimized in any following variants.
+  - These weights and gradients are just stored in a Taichi field, one set of weights and gradients for each particle. These are then retrieved via index lookup in e.g. the p2g and g2p loops, rather than being calculated on the fly for each particle-grid node pair, as must be done in MLS-MPM.
+
+- Unlike MLS-MPM, in which the particle/grid weight function has a support radius large enough to cover a 3x3 grid node neighborhood for each particle, the linear hat function kernel recommended for TLMPM will cover at most a 2x2 neighborhood for each particle.
+- TLMPM uses a PIC+FLIP blend to improve conservation of angular momentum. This necessitates the storage of temporary velocities during each timestep as well as a bit of extra computation to handle the PIC+FLIP update.
 
 ### `v2_grid_of_particles_in_config_space.py`
 
-_Avg FPS: 7.127766_
+_Avg FPS: 19.21_
 
 Comparing this version to the previous one, it will initially look like a lot of changes have been made. However, in actuality there is really only one change: since the positions of particles are fixed in configuration space in TLMPM, and moreover since they are fixed on a cartesian lattice with a fixed relationship to the MPM background grid (4 particles per grid cell), it makes sense to store the particles in a 2d field and access them by their index in the lattice. The actual position in configuration space can be easily calculated with the index in the particle field and the spacing of the background grid.
 
@@ -67,25 +76,25 @@ Note: starting with this file we always use the notation _(i,j)_ to refer to ind
 
 ### `v3_particle_grid_to_cell_grid_accessors.py`
 
-_Avg FPS: 7.378533_
+_Avg FPS: 20.84_
 
 This version makes one very small change. The `mpm128.py`, there is the concept of the grid `base` that corresponds to each particle; this is the bottom-left-most grid node of the 3x3 range of nodes that need to be iterated over for each particle during p2g and g2p. For TLMPM, this is not really needed because, since particles have a fixed position in configuration space and can be store on a fixed grid, the `base` need not be calculated from the configuration space position, it can calculated using the indices od the particle in the field of particles.
 
 ### `v4_gather.py`
 
-_Avg FPS: 31.74193_
+_Avg FPS: 32.31_
 
 This file has the most important changes of any so far, and massively improves the performance of the implementation. Since TLMPM operates in configuration space and each particle is permanently assigned to a background grid cell, rather than doing scattered atomic add operation from particles to grid cells, each grid cell can gather the information it needs from it's neighboring particles.
 
 ### `v4.1_more_gather_DEAD_END.py`
 
-_Avg FPS: 5.40506_
+_Avg FPS: 5.63_
 
 This variant attempted to complete the process of replacing scattered atomic adds with gathers by updating the calculation of `grid_mv` to use a gather. This unexpectedly _destroys_ the performance of the implentation. I don't understand why this should be the case at this poiont, it remains a question to be investigated.
 
 ### `v5_update_momentum_in_p2g.py`
 
-_Avg FPS: 32.957_
+_Avg FPS: 33.63_
 
 _Note: this file should be compared with v4, not v4.1_
 
@@ -93,6 +102,6 @@ We make only one small change in this file, rolling the `update_momenta()` kerne
 
 ### `v7_memory_placement.py`
 
-_Avg FPS: 32.4825_
+_Avg FPS: 33.36_
 
-Here we attempt to use some of Taichi's more advanced memory layout features to improve performance by arranging the `particles` field into blocks. This should increase the number of particles that are close to each other spatially (and therefore frequently accessed and processed together) are that are also close to each other in the machine's linear memory. This attempt was made based on some resources I'd read which suggested that such optimization might theoretically improve performance by improving cache coherence/locality or something along those lines, but in practice the performance is slightly reduced with the best block size and moderately reduced in the worst case.
+Here we attempt to use some of Taichi's more advanced memory layout features to improve performance by arranging the `particles` field into blocks. This should increase the number of particles that are close to each other spatially (and therefore frequently accessed and processed together) are that are also close to each other in the machine's linear memory. This attempt was made based on some resources I'd read which suggested that such optimization might theoretically improve performance by improving cache coherence/locality or something along those lines, but in practice the performance is very slightly reduced with the best block size and moderately reduced in the worst case.

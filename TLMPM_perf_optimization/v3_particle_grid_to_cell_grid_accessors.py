@@ -60,9 +60,9 @@ F = ti.Matrix.field(
 )  # deformation gradient
 Pk = ti.Matrix.field(2, 2, dtype=float, shape=particle_field_shape)  # pk stresses
 
-W_p2g = ti.Matrix.field(3, 3, dtype=float, shape=particle_field_shape)
-W_grad_x_p2g = ti.Matrix.field(3, 3, dtype=float, shape=particle_field_shape)
-W_grad_y_p2g = ti.Matrix.field(3, 3, dtype=float, shape=particle_field_shape)
+W_p2g = ti.Matrix.field(2, 2, dtype=float, shape=particle_field_shape)
+W_grad_x_p2g = ti.Matrix.field(2, 2, dtype=float, shape=particle_field_shape)
+W_grad_y_p2g = ti.Matrix.field(2, 2, dtype=float, shape=particle_field_shape)
 
 
 # NOTE: to prevent errors at the boundaries,
@@ -157,11 +157,16 @@ def hat_kern_derivative_2d(x, x_I):
     ]
 
 
+@ti.pyfunc
+def get_base_for_particle(f, g):
+    return (x_config[f, g] * inv_dx).cast(int)
+
+
 @ti.kernel
 def compute_p2g_weights_and_grads():
     for f, g in x_config:
-        base = particle_index_to_grid_base(f, g)
-        for i, j in ti.static(ti.ndrange(3, 3)):  # Loop over 3x3 grid node neighborhood
+        base = get_base_for_particle(f, g)
+        for i, j in ti.static(ti.ndrange(2, 2)):  # Loop over 2x2 grid node neighborhood
             offset = ti.Vector([i, j])
             grid_pos = (base + offset).cast(float) * dx
             W_p2g[f, g][i, j] = hat_kern_2d(x_config[f, g], grid_pos)
@@ -174,7 +179,7 @@ def compute_p2g_weights_and_grads():
 def compute_nodal_mass():
     for f, g in x_config:
         base = particle_index_to_grid_base(f, g)
-        for i, j in ti.static(ti.ndrange(3, 3)):  # Loop over 3x3 grid node neighborhood
+        for i, j in ti.static(ti.ndrange(2, 2)):  # Loop over 2x2 grid node neighborhood
             offset = ti.Vector([i, j])
             grid_m[base + offset] += W_p2g[f, g][i, j] * p_mass
     for i, j in grid_m:
@@ -202,7 +207,7 @@ def p2g():
     # "TLMPM Contacts", Alg. 1, line 8-12
     for f, g in x_config:
         base = particle_index_to_grid_base(f, g)
-        for i, j in ti.static(ti.ndrange(3, 3)):  # Loop over 3x3 grid node neighborhood
+        for i, j in ti.static(ti.ndrange(2, 2)):  # Loop over 2x2 grid node neighborhood
             offset = ti.Vector([i, j])
             weighted_mass = p_mass * W_p2g[f, g][i, j]
             grid_mv[base + offset] += weighted_mass * v[f, g]
@@ -233,7 +238,7 @@ def update_particle_and_grid_velocity():
     for f, g in v:
         v_p = v[f, g] * alpha
         base = particle_index_to_grid_base(f, g)
-        for i, j in ti.static(ti.ndrange(3, 3)):  # Loop over 3x3 grid node neighborhood
+        for i, j in ti.static(ti.ndrange(2, 2)):  # Loop over 2x2 grid node neighborhood
             offset = ti.Vector([i, j])
             v_next = grid_v_next_tmp[base + offset]
             v_this = grid_v[base + offset]
@@ -248,7 +253,7 @@ def update_particle_and_grid_velocity():
     # "TLMPM Contacts", Alg. 1, line 19
     for f, g in x_config:
         base = particle_index_to_grid_base(f, g)
-        for i, j in ti.static(ti.ndrange(3, 3)):  # Loop over 3x3 grid node neighborhood
+        for i, j in ti.static(ti.ndrange(2, 2)):  # Loop over 2x2 grid node neighborhood
             offset = ti.Vector([i, j])
             grid_mv[base + offset] += p_mass * W_p2g[f, g][i, j] * v[f, g]
 
@@ -263,7 +268,7 @@ def g2p():
         base = particle_index_to_grid_base(f, g)
 
         v_I = ti.Vector([0.0, 0.0])
-        for i, j in ti.static(ti.ndrange(3, 3)):  # Loop over 3x3 grid node neighborhood
+        for i, j in ti.static(ti.ndrange(2, 2)):  # Loop over 2x2 grid node neighborhood
             offset = ti.Vector([i, j])
             weight = W_p2g[f, g][i, j]
             v_I = grid_v[base + offset]
