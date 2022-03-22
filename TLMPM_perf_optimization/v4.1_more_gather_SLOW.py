@@ -129,7 +129,7 @@ def particle_index_to_lower_left_cell_index_in_range(f, g):
 
 @ti.pyfunc
 def grid_index_to_particle_base(f, g):
-    return 2 * ti.Vector([f, g]) - 1
+    return 2 * f - 1, 2 * g - 1
 
 
 @ti.pyfunc
@@ -200,9 +200,9 @@ def init_cell_stencil_weights_and_grads():
     # weights and grads for any cell center to the particle locations in
     # it's neighborhood
     grid_pos = grid_index_to_center_pos(1, 1)
-    particle_base = grid_index_to_particle_base(1, 1)
+    f_base, g_base = grid_index_to_particle_base(1, 1)
     for f_off, g_off in ti.static(ti.ndrange(4, 4)):
-        x_pos = x_config[f_off + particle_base[0], g_off + particle_base[1]]
+        x_pos = x_config[f_off + f_base, g_off + g_base]
         W_stencil[f_off, g_off] = hat_kern_2d(x_pos, grid_pos)
         W_grad = hat_kern_derivative_2d(x_pos, grid_pos)
         W_stencil_grad_x[f_off, g_off] = W_grad[0]
@@ -236,11 +236,11 @@ def p2g():
     for i, j in grid_m:
         grid_mv[i, j] = [0, 0]
         grid_f[i, j] = [0, 0]
-        particle_base = grid_index_to_particle_base(i, j)
+        f_base, g_base = grid_index_to_particle_base(i, j)
         for f_off, g_off in ti.static(ti.ndrange(4, 4)):
 
-            f = particle_base[0] + f_off
-            g = particle_base[1] + g_off
+            f = f_base + f_off
+            g = g_base + g_off
 
             weighted_mass = p_mass * W_stencil[f_off, g_off]
             grid_mv[i, j] += weighted_mass * v[f, g]
@@ -253,15 +253,17 @@ def p2g():
                 ]
             )
             force_internal = -V_0 * Pk[f, g] @ weight_grad
+            # "TLMPM Contacts", Alg. 1, line 12
             grid_f[i, j] += force_external + force_internal
 
 
 @ti.kernel
 def update_momenta():
+    # "TLMPM Contacts", Alg. 1; needed for line 18
     for i, j in grid_m:
         if grid_m[i, j] > 0:
             grid_v[i, j] = grid_mv[i, j] / grid_m[i, j]
-    # "TLMPM Contacts", Alg. 1, line 14, 17
+    # "TLMPM Contacts", Alg. 1, line 14 combined with 17
     for i, j in grid_m:
         if grid_m[i, j] > 0:
             grid_v_next_tmp[i, j] = grid_v[i, j] + grid_f[i, j] * dt / grid_m[i, j]
@@ -283,14 +285,15 @@ def update_particle_and_grid_velocity():
             v_p += alpha * weight * (v_next - v_this) + (1 - alpha) * weight * v_next
         v[f, g] = v_p
 
+    # "TLMPM Contacts", Alg. 1, line 19
     for i, j in grid_m:
         this_grid_mv = ti.Vector([0.0, 0.0])
+        f_base, g_base = grid_index_to_particle_base(i, j)
+        for f_off, g_off in ti.static(ti.ndrange(4, 4)):
+            f = f_base + f_off
+            g = g_base + g_off
+            this_grid_mv += p_mass * W_stencil[f_off, g_off] * v[f, g]
         if grid_m[i, j] > 0:
-            particle_base = grid_index_to_particle_base(i, j)
-            for f_off, g_off in ti.static(ti.ndrange(4, 4)):
-                f = particle_base[0] + f_off
-                g = particle_base[1] + g_off
-                this_grid_mv += p_mass * W_stencil[f_off, g_off] * v[f, g]
             grid_v[i, j] = this_grid_mv / grid_m[i, j]
 
 

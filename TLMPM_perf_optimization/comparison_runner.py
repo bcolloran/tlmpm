@@ -6,7 +6,8 @@ path = os.path.abspath(__file__ + "/..")
 quality = 6
 time = 20
 
-file_names = sorted([f for f in os.listdir(path) if f[0] == "v"])
+file_names = sorted([f for f in os.listdir(path) if f[0:2] == "v4"])
+# file_names = sorted([f for f in os.listdir(path) if f[0:1] == "v"])
 print(file_names)
 results = []
 

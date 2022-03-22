@@ -16,17 +16,11 @@ quality = (
 )  # Use a larger value for higher-res simulations
 
 """
-NOTE: In this variant, we attempt to use a "gather" strategy rather than "scatter". The hope is that this will improve performance by avoiding atomic operations during p2g and g2p, which can be slow. This should also open the door for future optimizations using block local storage.
-
-NOTE: to make this work, we add some "padding" particles around the edge of the jelly bar, otherwise grid nodes at the boundary would attempt to access non-existent particles.
-
-NOTE: using gather in p2g nearly doubles speed: ~65fps -> 108fps
-
-NOTE: g2p does not need to change drastically because it already gathers to particles from cells. That said, perhaps we can simplify the kernel handling.
+NOTE: rolling update_momenta into p2g: ~205-208FPS -> 224FPS
 
 """
 
-ti.init(arch=ti.gpu, kernel_profiler=True)  # Try to run on GPU
+ti.init(arch=ti.gpu)  # Try to run on GPU
 
 n_grid = 128 * quality
 dx = 1 / n_grid  # grid spacing
@@ -135,7 +129,7 @@ def particle_index_to_lower_left_cell_index_in_range(f, g):
 
 @ti.pyfunc
 def grid_index_to_particle_base(f, g):
-    return 2 * ti.Vector([f, g]) - 1
+    return 2 * f - 1, 2 * g - 1
 
 
 @ti.pyfunc
@@ -206,9 +200,9 @@ def init_cell_stencil_weights_and_grads():
     # weights and grads for any cell center to the particle locations in
     # it's neighborhood
     grid_pos = grid_index_to_center_pos(1, 1)
-    particle_base = grid_index_to_particle_base(1, 1)
+    f_base, g_base = grid_index_to_particle_base(1, 1)
     for f_off, g_off in ti.static(ti.ndrange(4, 4)):
-        x_pos = x_config[f_off + particle_base[0], g_off + particle_base[1]]
+        x_pos = x_config[f_off + f_base, g_off + g_base]
         W_stencil[f_off, g_off] = hat_kern_2d(x_pos, grid_pos)
         W_grad = hat_kern_derivative_2d(x_pos, grid_pos)
         W_stencil_grad_x[f_off, g_off] = W_grad[0]
@@ -242,11 +236,11 @@ def p2g():
     for i, j in grid_m:
         grid_mv[i, j] = [0, 0]
         grid_f[i, j] = [0, 0]
-        particle_base = grid_index_to_particle_base(i, j)
+        f_base, g_base = grid_index_to_particle_base(i, j)
         for f_off, g_off in ti.static(ti.ndrange(4, 4)):
 
-            f = particle_base[0] + f_off
-            g = particle_base[1] + g_off
+            f = f_base + f_off
+            g = g_base + g_off
 
             weighted_mass = p_mass * W_stencil[f_off, g_off]
             grid_mv[i, j] += weighted_mass * v[f, g]
@@ -259,22 +253,16 @@ def p2g():
                 ]
             )
             force_internal = -V_0 * Pk[f, g] @ weight_grad
+            # "TLMPM Contacts", Alg. 1, line 12
             grid_f[i, j] += force_external + force_internal
-
-
-@ti.kernel
-def update_momenta():
-    for i, j in grid_m:
         if grid_m[i, j] > 0:
             grid_v[i, j] = grid_mv[i, j] / grid_m[i, j]
-    # "TLMPM Contacts", Alg. 1, line 14, 17
-    for i, j in grid_m:
-        if grid_m[i, j] > 0:
+            # "TLMPM Contacts", Alg. 1, line 14 combined with 17
             grid_v_next_tmp[i, j] = grid_v[i, j] + grid_f[i, j] * dt / grid_m[i, j]
 
 
 @ti.kernel
-def update_particle_and_grid_velocity():
+def update_particle_velocity():
     # "TLMPM Contacts", Alg. 1, line 18
     for f, g in v:
         v_p = v[f, g] * alpha
@@ -289,22 +277,19 @@ def update_particle_and_grid_velocity():
             v_p += alpha * weight * (v_next - v_this) + (1 - alpha) * weight * v_next
         v[f, g] = v_p
 
-    # NOTE: need to reset grid_mv again before Alg.1 line 19
-    for i, j in grid_m:
-        grid_mv[i, j] = [0, 0]
 
+@ti.kernel
+def update_grid_velocity():
     # "TLMPM Contacts", Alg. 1, line 19
-    for f, g in v:
-        i_base, j_base = particle_index_to_lower_left_cell_index_in_range(f, g)
-        for i_off, j_off in ti.static(ti.ndrange(2, 2)):
-            i = i_base + i_off
-            j = j_base + j_off
-            f_stencil, g_stencil = W_stencil_index_from_ij_fg(i, j, f, g)
-            grid_mv[i, j] += p_mass * W_stencil[f_stencil, g_stencil] * v[f, g]
-
     for i, j in grid_m:
+        this_grid_mv = ti.Vector([0.0, 0.0])
+        f_base, g_base = grid_index_to_particle_base(i, j)
+        for f_off, g_off in ti.static(ti.ndrange(4, 4)):
+            f = f_base + f_off
+            g = g_base + g_off
+            this_grid_mv += p_mass * W_stencil[f_off, g_off] * v[f, g]
         if grid_m[i, j] > 0:
-            grid_v[i, j] = grid_mv[i, j] / grid_m[i, j]
+            grid_v[i, j] = this_grid_mv / grid_m[i, j]
 
 
 @ti.kernel
@@ -362,7 +347,6 @@ radius = 0.002
 frame = 0
 duration = 0
 fps_counter = FpsCounter()
-ti.clear_kernel_profile_info()
 while window.running and duration < max_duration:
     fps, duration = fps_counter.count_fps(frame)
     frame += 1
@@ -373,13 +357,11 @@ while window.running and duration < max_duration:
             break
     for s in range(int(2e-3 // dt)):
         p2g()
-        update_momenta()
-        update_particle_and_grid_velocity()
+        update_particle_velocity()
+        update_grid_velocity()
         g2p()
     update_render_buffer()
 
     canvas.set_background_color((0.067, 0.184, 0.255))
     canvas.circles(x_render, radius=radius, color=(0.93, 0.33, 0.23))
     window.show()
-
-ti.print_kernel_profile_info()

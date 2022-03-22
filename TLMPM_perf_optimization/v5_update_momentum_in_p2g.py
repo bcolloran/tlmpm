@@ -42,6 +42,12 @@ bar_width_grid_cells = int(n_grid / 2)
 
 n_particles = int(particles_per_cell * bar_height_grid_cells * bar_width_grid_cells)
 print("n_particles", n_particles)
+print(
+    "bar_height_grid_cells",
+    bar_height_grid_cells,
+    "bar_width_grid_cells",
+    bar_width_grid_cells,
+)
 
 bar_height = bar_height_grid_cells * dx
 bar_width = bar_width_grid_cells * dx
