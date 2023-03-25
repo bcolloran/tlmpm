@@ -1,4 +1,4 @@
-# 2d TLMPM implemented for the GPU with Taichi
+# 2d continuum physics for the GPU with Taichi
 
 ![Peek 2022-02-25 15-09](https://user-images.githubusercontent.com/2380975/155816338-0695e4b3-0edc-48a9-8ad3-0439a1f86272.gif)
 
